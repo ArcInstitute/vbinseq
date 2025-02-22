@@ -8,3 +8,8 @@ bitnuc = "0.2.10"
 byteorder = "1.5.0"
 memmap2 = "0.9.5"
 thiserror = "2.0.11"
+
+[dev-dependencies]
+anyhow = "1.0.96"
+nucgen = "0.1.2"
+rand = "0.8"
