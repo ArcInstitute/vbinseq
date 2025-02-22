@@ -7,14 +7,20 @@ use crate::error::{HeaderError, Result};
 /// Current magic number: "VSEQ" in ASCII
 const MAGIC: u32 = 0x56534551;
 
+/// Current magic number: "BLOCKSEQ"
+const BLOCK_MAGIC: u64 = 0x424C4F434B534551;
+
 /// Current format version
 const FORMAT: u8 = 1;
 
 /// Size of the header in bytes
 pub const SIZE_HEADER: usize = 32;
 
-/// Default block size: 1MB
-pub const BLOCK_SIZE: u64 = 1024 * 1024;
+/// Size of the block header in bytes
+pub const SIZE_BLOCK_HEADER: usize = 8;
+
+/// Default block size: 64KB
+pub const BLOCK_SIZE: u64 = 128 * 1024;
 
 #[derive(Clone, Copy)]
 pub struct VBinseqHeader {
@@ -92,4 +98,24 @@ impl VBinseqHeader {
     }
 }
 
-pub struct BlockHeader {}
+#[derive(Clone, Copy)]
+pub struct BlockHeader {
+    pub magic: u64,
+}
+impl Default for BlockHeader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl BlockHeader {
+    pub fn new() -> Self {
+        Self { magic: BLOCK_MAGIC }
+    }
+
+    pub fn write_bytes<W: Write>(&self, writer: &mut W) -> Result<()> {
+        let mut buffer = [0u8; 8];
+        LittleEndian::write_u64(&mut buffer, self.magic);
+        writer.write_all(&buffer)?;
+        Ok(())
+    }
+}
