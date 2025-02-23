@@ -116,6 +116,11 @@ impl<W: Write> VBinseqWriter<W> {
     }
 
     pub fn write_nucleotides(&mut self, flag: u64, sequence: &[u8]) -> Result<bool> {
+        // Validate the right write operation is being used
+        if self.header.qual == true {
+            return Err(WriteError::QualityFlagSet.into());
+        }
+
         // encode the sequence
         self.sbuffer.clear();
         if bitnuc::encode(sequence, &mut self.sbuffer).is_err() {
@@ -125,12 +130,12 @@ impl<W: Write> VBinseqWriter<W> {
         // Check if the current block can handle the next record
         // and initiate a new block if necessary
         let record_size = record_byte_size(&self.sbuffer);
+        // let percent_full = (self.bpos as f64 / self.header.block as f64) * 100.0;
         if self.bpos + record_size > self.header.block as usize {
-            // eprintln!("Block full - starting new block");
+            // eprintln!("Block full ({percent_full}%) - starting new block");
             self.flush_block()?;
             self.write_block_header()?;
         } else {
-            // let percent_full = (self.bpos as f64 / self.header.block as f64) * 100.0;
             // eprintln!(
             //     "Block at {percent_full}% - writing sequence length {}",
             //     sequence.len()

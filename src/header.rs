@@ -51,15 +51,19 @@ pub struct VBinseqHeader {
 }
 impl Default for VBinseqHeader {
     fn default() -> Self {
-        Self::new(BLOCK_SIZE, false)
+        Self::with_capacity(BLOCK_SIZE, false)
     }
 }
 impl VBinseqHeader {
-    pub fn new(block_size: u64, qual: bool) -> Self {
+    pub fn new(qual: bool) -> Self {
+        Self::with_capacity(BLOCK_SIZE, qual)
+    }
+
+    pub fn with_capacity(block: u64, qual: bool) -> Self {
         Self {
             magic: MAGIC,
             format: FORMAT,
-            block: block_size,
+            block,
             qual,
             reserved: [42; 18],
         }

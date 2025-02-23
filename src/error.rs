@@ -20,7 +20,9 @@ pub enum Error {
 
 #[derive(thiserror::Error, Debug)]
 pub enum WriteError {
-    #[error("Quality flag not set in header")]
+    #[error("Quality flag is set in header but trying to write without quality scores.")]
+    QualityFlagSet,
+    #[error("Quality flag not set in header but trying to write quality scores.")]
     QualityFlagNotSet,
 }
 
