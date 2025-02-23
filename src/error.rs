@@ -5,6 +5,9 @@ pub enum Error {
     #[error("Error processing header: {0}")]
     HeaderError(#[from] HeaderError),
 
+    #[error("Error writing file: {0}")]
+    WriteError(#[from] WriteError),
+
     #[error("Error reading file: {0}")]
     ReadError(#[from] ReadError),
 
@@ -13,6 +16,14 @@ pub enum Error {
 
     #[error("Bitnuc error: {0}")]
     BitnucError(#[from] bitnuc::NucleotideError),
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum WriteError {
+    #[error("Quality flag is set in header but trying to write without quality scores.")]
+    QualityFlagSet,
+    #[error("Quality flag not set in header but trying to write quality scores.")]
+    QualityFlagNotSet,
 }
 
 #[derive(thiserror::Error, Debug)]

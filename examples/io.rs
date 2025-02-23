@@ -13,7 +13,7 @@ fn write_set(input_filepath: &str, output_filepath: &str) -> Result<()> {
     let mut rset = fastq::RecordSet::default();
 
     let handle = File::create(output_filepath).map(BufWriter::new)?;
-    let header = VBinseqHeader::default();
+    let header = VBinseqHeader::new(true);
     let mut writer = VBinseqWriter::new(handle, header)?;
 
     let mut rnum = 0;
@@ -21,7 +21,8 @@ fn write_set(input_filepath: &str, output_filepath: &str) -> Result<()> {
         for record in rset.iter() {
             let record = record?;
             let seq = record.seq();
-            writer.write_nucleotides(rnum, seq)?;
+            let qual = record.qual();
+            writer.write_nucleotides_quality(rnum, seq, qual)?;
             rnum += 1;
         }
     }

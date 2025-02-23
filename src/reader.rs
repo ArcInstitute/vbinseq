@@ -24,6 +24,9 @@ pub struct RecordBlock {
 
     /// Buffer: All packed sequences in the block
     sequences: Vec<u64>,
+
+    /// Buffer: All quality scores in the block
+    qualities: Vec<u8>,
 }
 impl RecordBlock {
     pub fn new() -> Self {
@@ -31,6 +34,7 @@ impl RecordBlock {
             flags: Vec::new(),
             lens: Vec::new(),
             sequences: Vec::new(),
+            qualities: Vec::new(),
         }
     }
 
@@ -46,9 +50,10 @@ impl RecordBlock {
         self.flags.clear();
         self.lens.clear();
         self.sequences.clear();
+        self.qualities.clear();
     }
 
-    fn ingest_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+    fn ingest_bytes(&mut self, bytes: &[u8], has_quality: bool) -> Result<()> {
         let mut pos = 0;
         loop {
             // Check that we have enough bytes to at least read the flag
@@ -83,6 +88,13 @@ impl RecordBlock {
                 self.sequences.push(LittleEndian::read_u64(&seq));
                 pos += 8;
             }
+
+            // Add the quality score to the block
+            if has_quality {
+                let qual_buffer = &bytes[pos..pos + len as usize];
+                self.qualities.extend_from_slice(qual_buffer);
+                pos += len as usize;
+            }
         }
         Ok(())
     }
@@ -116,10 +128,16 @@ impl<'a> Iterator for RecordBlockIter<'a> {
         let elen = encoded_sequence_len(len);
         let sequence = &self.block.sequences[self.epos..self.epos + elen];
 
+        let quality = if self.block.qualities.is_empty() {
+            &[]
+        } else {
+            &self.block.qualities[self.epos..self.epos + len as usize]
+        };
+
         self.rpos += 1;
         self.epos += elen;
 
-        Some(RefRecord::new(flag, len, sequence))
+        Some(RefRecord::new(flag, len, sequence, quality))
     }
 }
 
@@ -127,13 +145,15 @@ pub struct RefRecord<'a> {
     flag: u64,
     len: u64,
     sequence: &'a [u64],
+    quality: &'a [u8],
 }
 impl<'a> RefRecord<'a> {
-    pub fn new(flag: u64, len: u64, sequence: &'a [u64]) -> Self {
+    pub fn new(flag: u64, len: u64, sequence: &'a [u64], quality: &'a [u8]) -> Self {
         Self {
             flag,
             len,
             sequence,
+            quality,
         }
     }
     pub fn flag(&self) -> u64 {
@@ -144,6 +164,9 @@ impl<'a> RefRecord<'a> {
     }
     pub fn sequence(&self) -> &[u64] {
         self.sequence
+    }
+    pub fn quality(&self) -> &[u8] {
+        self.quality
     }
     pub fn decode_into(&self, dbuf: &mut Vec<u8>) -> Result<()> {
         bitnuc::decode(self.sequence, self.len as usize, dbuf)?;
@@ -205,7 +228,7 @@ impl MmapReader {
             return Err(ReadError::UnexpectedEndOfFile(self.pos).into());
         }
         let block_buffer = &self.mmap[self.pos..self.pos + self.header.block as usize];
-        block.ingest_bytes(block_buffer)?;
+        block.ingest_bytes(block_buffer, self.header.qual)?;
         self.pos += self.header.block as usize; // advance past the block contents
 
         Ok(true)
