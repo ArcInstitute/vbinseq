@@ -2,7 +2,7 @@ use std::io::Write;
 
 use byteorder::{LittleEndian, WriteBytesExt};
 
-use crate::error::Result;
+use crate::error::{Result, WriteError};
 use crate::header::{BlockHeader, VBinseqHeader};
 
 /// Write a single flag to the writer.
@@ -24,6 +24,12 @@ pub fn write_buffer<W: Write>(writer: &mut W, ebuf: &[u64]) -> Result<()> {
     Ok(())
 }
 
+/// Write all the elements of the quality score buffer to the writer.
+pub fn write_quality<W: Write>(writer: &mut W, quality: &[u8]) -> Result<()> {
+    writer.write_all(quality)?;
+    Ok(())
+}
+
 /// The record byte size is the size of the embedded buffer in bytes
 /// as well as the size of the flag and length of the buffer.
 ///
@@ -33,6 +39,13 @@ pub fn write_buffer<W: Write>(writer: &mut W, ebuf: &[u64]) -> Result<()> {
 /// and w is the word size (1byte)
 pub fn record_byte_size(ebuf: &[u64]) -> usize {
     (8 * ebuf.len()) + (2 * 8)
+}
+
+/// The record byte size is the size of the embedded buffer in bytes
+/// plus the size of the flag and sequence length as two separate u64 fields.
+/// This also includes the quality score length which is 1 byte per base.
+pub fn record_byte_size_quality(ebuf: &[u64], slen: usize) -> usize {
+    (8 * ebuf.len()) + (2 * 8) + slen
 }
 
 /// A writer for the VBinseq format.
@@ -128,6 +141,49 @@ impl<W: Write> VBinseqWriter<W> {
         write_flag(&mut self.inner, flag)?;
         write_length(&mut self.inner, sequence.len() as u64)?;
         write_buffer(&mut self.inner, &self.sbuffer)?;
+
+        // Update the block position
+        self.bpos += record_size;
+
+        Ok(true)
+    }
+
+    /// Writes nucleotides and quality scores to the writer.
+    pub fn write_nucleotides_quality(
+        &mut self,
+        flag: u64,
+        sequence: &[u8],
+        quality: &[u8],
+    ) -> Result<bool> {
+        if self.header.qual == false {
+            return Err(WriteError::QualityFlagNotSet.into());
+        }
+
+        // encode the sequence
+        self.sbuffer.clear();
+        if bitnuc::encode(sequence, &mut self.sbuffer).is_err() {
+            return Ok(false);
+        }
+
+        // Check if the current block can handle the next record
+        let record_size = record_byte_size_quality(&self.sbuffer, quality.len());
+        // let percent_full = (self.bpos as f64 / self.header.block as f64) * 100.0;
+        if self.bpos + record_size > self.header.block as usize {
+            // eprintln!("Block cannot fit record ({percent_full}%)- starting new block");
+            self.flush_block()?;
+            self.write_block_header()?;
+        } else {
+            // eprintln!(
+            //     "Block at {percent_full}% - writing sequence length {}",
+            //     sequence.len()
+            // );
+        }
+
+        // Write the flag, length, sequence, and quality scores to the block
+        write_flag(&mut self.inner, flag)?;
+        write_length(&mut self.inner, sequence.len() as u64)?;
+        write_buffer(&mut self.inner, &self.sbuffer)?;
+        write_quality(&mut self.inner, quality)?;
 
         // Update the block position
         self.bpos += record_size;
