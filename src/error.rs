@@ -1,5 +1,3 @@
-use std::io;
-
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(thiserror::Error, Debug)]
@@ -11,7 +9,7 @@ pub enum Error {
     ReadError(#[from] ReadError),
 
     #[error("Error with IO: {0}")]
-    IoError(#[from] io::Error),
+    IoError(#[from] std::io::Error),
 
     #[error("Bitnuc error: {0}")]
     BitnucError(#[from] bitnuc::NucleotideError),
