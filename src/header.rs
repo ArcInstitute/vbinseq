@@ -39,23 +39,29 @@ pub struct VBinseqHeader {
     /// 8 byte
     pub block: u64,
 
+    /// Quality scores included
+    ///
+    /// 1 byte
+    pub qual: bool,
+
     /// Reserved remaining bytes for future use
     ///
-    /// 19 bytes
-    pub reserved: [u8; 19],
+    /// 18 bytes
+    pub reserved: [u8; 18],
 }
 impl Default for VBinseqHeader {
     fn default() -> Self {
-        Self::new(BLOCK_SIZE)
+        Self::new(BLOCK_SIZE, false)
     }
 }
 impl VBinseqHeader {
-    pub fn new(block_size: u64) -> Self {
+    pub fn new(block_size: u64, qual: bool) -> Self {
         Self {
             magic: MAGIC,
             format: FORMAT,
             block: block_size,
-            reserved: [42; 19],
+            qual,
+            reserved: [42; 18],
         }
     }
 
@@ -69,7 +75,8 @@ impl VBinseqHeader {
             return Err(HeaderError::InvalidFormatVersion(format).into());
         }
         let block = LittleEndian::read_u64(&buffer[5..13]);
-        let reserved = match buffer[13..32].try_into() {
+        let qual = buffer[13] != 0;
+        let reserved = match buffer[14..32].try_into() {
             Ok(reserved) => reserved,
             Err(_) => return Err(HeaderError::InvalidReservedBytes.into()),
         };
@@ -77,6 +84,7 @@ impl VBinseqHeader {
             magic,
             format,
             block,
+            qual,
             reserved,
         })
     }
@@ -86,7 +94,8 @@ impl VBinseqHeader {
         LittleEndian::write_u32(&mut buffer[0..4], self.magic);
         buffer[4] = self.format;
         LittleEndian::write_u64(&mut buffer[5..13], self.block);
-        buffer[13..32].copy_from_slice(&self.reserved);
+        buffer[13] = if self.qual { 1 } else { 0 };
+        buffer[14..32].copy_from_slice(&self.reserved);
         writer.write_all(&buffer)?;
         Ok(())
     }
