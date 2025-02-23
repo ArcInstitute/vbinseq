@@ -1,37 +1,62 @@
-use std::{fs::File, io::BufWriter};
+use std::{
+    fs::File,
+    io::{BufWriter, Read},
+};
 
 use anyhow::Result;
-use nucgen::Sequence;
-use rand::Rng;
-use vbinseq::{VBinseqHeader, VBinseqWriter};
+use paraseq::fastq;
+use vbinseq::{reader::RecordBlock, MmapReader, VBinseqHeader, VBinseqWriter};
 
-pub fn main() -> Result<()> {
-    let filepath = "./test.vbq";
-    let num_seq = 10_000;
-    let lbound = 500; // smallest sequence size
-    let rbound = 20000; // largest sequence size
-    let mut seq = Sequence::with_capacity(rbound);
-    let mut rng = rand::thread_rng();
-    seq.fill_buffer(&mut rng, rbound);
+fn write_set(input_filepath: &str, output_filepath: &str) -> Result<()> {
+    let in_handle = match_input(input_filepath)?;
+    let mut reader = fastq::Reader::new(in_handle);
+    let mut rset = fastq::RecordSet::default();
 
-    let handle = File::create(filepath).map(BufWriter::new)?;
+    let handle = File::create(output_filepath).map(BufWriter::new)?;
     let header = VBinseqHeader::default();
     let mut writer = VBinseqWriter::new(handle, header)?;
 
-    for idx in 0..num_seq {
-        // Generate a random sequence size
-        seq.fill_buffer(&mut rng, rbound);
-
-        if idx % 1_000 == 0 {
-            eprintln!("Processed {} sequences", idx);
+    let mut rnum = 0;
+    while rset.fill(&mut reader)? {
+        for record in rset.iter() {
+            let record = record?;
+            let seq = record.seq();
+            writer.write_nucleotides(rnum, seq)?;
+            rnum += 1;
         }
-
-        let size = rng.gen_range(lbound..=rbound);
-        let seq_buffer = seq.bytes();
-        let subseq = &seq_buffer[..size];
-        writer.write_nucleotides(1 + idx as u64, subseq)?;
     }
-    eprintln!("Finished writing {} sequences to {}", num_seq, filepath);
+    eprintln!("Finished writing {} sequences to {}", rnum, output_filepath);
+
+    Ok(())
+}
+
+fn read_set(filepath: &str) -> Result<()> {
+    eprintln!("Reading sequences from {}", filepath);
+
+    let mut reader = MmapReader::new(filepath)?;
+    let mut block = RecordBlock::new();
+
+    let mut n_records = 0;
+    while reader.read_block_into(&mut block)? {
+        n_records += block.n_records();
+    }
+
+    eprintln!("Read {} records", n_records);
+
+    Ok(())
+}
+
+fn match_input(filepath: &str) -> Result<Box<dyn Read + Send>> {
+    let (passthrough, _comp) = niffler::send::from_path(filepath)?;
+    Ok(passthrough)
+}
+
+pub fn main() -> Result<()> {
+    let in_filepath = "./data/out.fq.zst";
+    let out_filepath = "./data/out.vbq";
+
+    write_set(in_filepath, out_filepath)?;
+    read_set(out_filepath)?;
 
     Ok(())
 }
