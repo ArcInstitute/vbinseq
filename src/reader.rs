@@ -128,10 +128,16 @@ impl<'a> Iterator for RecordBlockIter<'a> {
         let elen = encoded_sequence_len(len);
         let sequence = &self.block.sequences[self.epos..self.epos + elen];
 
+        let quality = if self.block.qualities.is_empty() {
+            &[]
+        } else {
+            &self.block.qualities[self.epos..self.epos + len as usize]
+        };
+
         self.rpos += 1;
         self.epos += elen;
 
-        Some(RefRecord::new(flag, len, sequence))
+        Some(RefRecord::new(flag, len, sequence, quality))
     }
 }
 
@@ -139,13 +145,15 @@ pub struct RefRecord<'a> {
     flag: u64,
     len: u64,
     sequence: &'a [u64],
+    quality: &'a [u8],
 }
 impl<'a> RefRecord<'a> {
-    pub fn new(flag: u64, len: u64, sequence: &'a [u64]) -> Self {
+    pub fn new(flag: u64, len: u64, sequence: &'a [u64], quality: &'a [u8]) -> Self {
         Self {
             flag,
             len,
             sequence,
+            quality,
         }
     }
     pub fn flag(&self) -> u64 {
@@ -156,6 +164,9 @@ impl<'a> RefRecord<'a> {
     }
     pub fn sequence(&self) -> &[u64] {
         self.sequence
+    }
+    pub fn quality(&self) -> &[u8] {
+        self.quality
     }
     pub fn decode_into(&self, dbuf: &mut Vec<u8>) -> Result<()> {
         bitnuc::decode(self.sequence, self.len as usize, dbuf)?;
