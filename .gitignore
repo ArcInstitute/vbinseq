@@ -4,3 +4,4 @@ Cargo.lock
 *.vbq*
 *.fq*
 profile.json
+data/*.vbq
