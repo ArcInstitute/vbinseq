@@ -114,8 +114,8 @@ impl<W: Write> VBinseqWriter<W> {
         let record_size = record_byte_size(&self.sbuffer);
         if self.bpos + record_size > self.header.block as usize {
             // eprintln!("Block full - starting new block");
-            self.write_block_header()?;
             self.flush_block()?;
+            self.write_block_header()?;
         } else {
             // let percent_full = (self.bpos as f64 / self.header.block as f64) * 100.0;
             // eprintln!(

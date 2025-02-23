@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 
 use byteorder::{ByteOrder, LittleEndian};
 
-use crate::error::{HeaderError, Result};
+use crate::error::{HeaderError, ReadError, Result};
 
 /// Current magic number: "VSEQ" in ASCII
 const MAGIC: u32 = 0x56534551;
@@ -116,6 +116,14 @@ impl BlockHeader {
         let mut buffer = [0u8; 8];
         LittleEndian::write_u64(&mut buffer, self.magic);
         writer.write_all(&buffer)?;
+        Ok(())
+    }
+
+    pub fn validate(buffer: &[u8], pos: usize) -> Result<()> {
+        let magic = LittleEndian::read_u64(&buffer[pos..pos + 8]);
+        if magic != BLOCK_MAGIC {
+            return Err(ReadError::InvalidBlockMagicNumber(magic, pos).into());
+        }
         Ok(())
     }
 }
