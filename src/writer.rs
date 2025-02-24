@@ -104,7 +104,7 @@ impl<W: Write> VBinseqWriter<W> {
         quality: &[u8],
     ) -> Result<bool> {
         // Validate the right write operation is being used
-        if self.header.qual {
+        if !self.header.qual {
             return Err(WriteError::QualityFlagNotSet.into());
         }
 
