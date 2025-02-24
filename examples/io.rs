@@ -4,13 +4,32 @@ use std::{
 };
 
 use anyhow::Result;
+use clap::Parser;
 use paraseq::fastq;
 use vbinseq::{MmapReader, VBinseqHeader, VBinseqWriter};
 
-fn write_set(input_filepath: &str, output_filepath: &str) -> Result<()> {
-    let write_quality = true;
-    let compress = true;
+#[derive(Parser)]
+struct Args {
+    #[clap(short, long, default_value = "./data/out.fq.zst")]
+    input: String,
+    #[clap(short, long, default_value = "./data/out.vbq")]
+    output: String,
+    #[clap(short, long)]
+    compress: bool,
+    #[clap(short = 'q', long)]
+    write_quality: bool,
+    #[clap(short = 's', long)]
+    skip_write: bool,
+    #[clap(short = 'S', long)]
+    skip_read: bool,
+}
 
+fn write_set(
+    input_filepath: &str,
+    output_filepath: &str,
+    compress: bool,
+    write_quality: bool,
+) -> Result<()> {
     let in_handle = match_input(input_filepath)?;
     let mut reader = fastq::Reader::new(in_handle);
     let mut rset = fastq::RecordSet::default();
@@ -58,7 +77,7 @@ fn read_set(filepath: &str) -> Result<()> {
             dbuf.clear();
         }
         n_blocks += 1;
-        eprintln!("Read {} records from block {}", block.n_records(), n_blocks);
+        // eprintln!("Read {} records from block {}", block.n_records(), n_blocks);
     }
 
     eprintln!("Read {} records from {} blocks", n_records, n_blocks);
@@ -71,15 +90,12 @@ fn match_input(filepath: &str) -> Result<Box<dyn Read + Send>> {
 }
 
 pub fn main() -> Result<()> {
-    let in_filepath = std::env::args()
-        .nth(1)
-        .unwrap_or("./data/out.fq.zst".to_string());
-    let out_filepath = std::env::args()
-        .nth(2)
-        .unwrap_or("./data/out.vbq".to_string());
-
-    write_set(&in_filepath, &out_filepath)?;
-    read_set(&out_filepath)?;
-
+    let args = Args::parse();
+    if !args.skip_write {
+        write_set(&args.input, &args.output, args.compress, args.write_quality)?;
+    }
+    if !args.skip_read {
+        read_set(&args.output)?;
+    }
     Ok(())
 }
