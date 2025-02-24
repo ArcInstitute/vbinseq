@@ -1,9 +1,10 @@
-use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
+use std::{fs::File, io::Read};
 
-use byteorder::{ByteOrder, LittleEndian};
+use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use memmap2::Mmap;
+use zstd::Decoder;
 
 use crate::{
     error::ReadError,
@@ -27,14 +28,22 @@ pub struct RecordBlock {
 
     /// Buffer: All quality scores in the block
     qualities: Vec<u8>,
+
+    /// Maximum block size
+    block_size: usize,
+
+    /// Reusable u8 buffer used for reading compressed sequences
+    rbuf: Vec<u8>,
 }
 impl RecordBlock {
-    pub fn new() -> Self {
+    pub fn new(block_size: usize) -> Self {
         Self {
             flags: Vec::new(),
             lens: Vec::new(),
             sequences: Vec::new(),
             qualities: Vec::new(),
+            block_size,
+            rbuf: Vec::new(),
         }
     }
 
@@ -93,6 +102,61 @@ impl RecordBlock {
             if has_quality {
                 let qual_buffer = &bytes[pos..pos + len as usize];
                 self.qualities.extend_from_slice(qual_buffer);
+                pos += len as usize;
+            }
+        }
+        Ok(())
+    }
+
+    fn ingest_compressed_bytes(&mut self, bytes: &[u8], has_quality: bool) -> Result<()> {
+        let mut decoder = Decoder::with_buffer(bytes)?;
+
+        let mut pos = 0;
+        loop {
+            // Check that we have enough bytes to at least read the flag
+            // and length. If not, break out of the loop.
+            if pos + 16 > self.block_size {
+                break;
+            }
+
+            // Read the flag and advance the position
+            let flag = decoder.read_u64::<LittleEndian>()?;
+            pos += 8;
+
+            // Read the length and advance the position
+            let len = decoder.read_u64::<LittleEndian>()?;
+            pos += 8;
+
+            // No more records in the block
+            if len == 0 {
+                // It is possible to end up here if the block is not full
+                // In this case the flag and the length are both zero
+                // and effectively blank but initialized memory.
+                break;
+            }
+
+            // Add the record to the block
+            self.flags.push(flag);
+            self.lens.push(len);
+
+            // Read the sequence and advance the position
+            let slen = encoded_sequence_len(len);
+            let slen_bytes = (slen * 8) as usize;
+            self.rbuf.resize(slen_bytes, 0);
+            decoder.read_exact(&mut self.rbuf[0..slen_bytes])?;
+            for chunk in self.rbuf.chunks_exact(8) {
+                let seq_part = LittleEndian::read_u64(chunk);
+                self.sequences.push(seq_part);
+            }
+            self.rbuf.clear();
+            pos += slen_bytes;
+
+            // Add the quality score to the block
+            if has_quality {
+                self.rbuf.resize(len as usize, 0);
+                decoder.read_exact(&mut self.rbuf[0..len as usize])?;
+                self.qualities.extend_from_slice(&self.rbuf);
+                self.rbuf.clear();
                 pos += len as usize;
             }
         }
@@ -209,6 +273,10 @@ impl MmapReader {
         })
     }
 
+    pub fn new_block(&self) -> RecordBlock {
+        RecordBlock::new(self.header.block as usize)
+    }
+
     /// Fill an existing RecordBlock with the next block of records
     ///
     /// Returns false if EOF was reached, true if the block was filled
@@ -220,16 +288,27 @@ impl MmapReader {
         if self.pos + SIZE_BLOCK_HEADER > self.mmap.len() {
             return Ok(false);
         }
-        BlockHeader::validate(&self.mmap, self.pos)?; // validate the block header
+        let mut header_bytes = [0u8; SIZE_BLOCK_HEADER];
+        header_bytes.copy_from_slice(&self.mmap[self.pos..self.pos + SIZE_BLOCK_HEADER]);
+        let header = BlockHeader::from_bytes(&header_bytes)?;
         self.pos += SIZE_BLOCK_HEADER; // advance past the block header
 
         // Read the block contents
-        if self.pos + self.header.block as usize > self.mmap.len() {
+        let rbound = if self.header.compressed {
+            header.size as usize
+        } else {
+            self.header.block as usize
+        };
+        if self.pos + rbound > self.mmap.len() {
             return Err(ReadError::UnexpectedEndOfFile(self.pos).into());
         }
-        let block_buffer = &self.mmap[self.pos..self.pos + self.header.block as usize];
-        block.ingest_bytes(block_buffer, self.header.qual)?;
-        self.pos += self.header.block as usize; // advance past the block contents
+        let block_buffer = &self.mmap[self.pos..self.pos + rbound];
+        if self.header.compressed {
+            block.ingest_compressed_bytes(block_buffer, self.header.qual)?;
+        } else {
+            block.ingest_bytes(block_buffer, self.header.qual)?;
+        }
+        self.pos += rbound;
 
         Ok(true)
     }
