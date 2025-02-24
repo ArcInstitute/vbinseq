@@ -142,7 +142,7 @@ impl RecordBlock {
 
             // Read the sequence and advance the position
             let slen = encoded_sequence_len(len);
-            let slen_bytes = (slen * 8) as usize;
+            let slen_bytes = slen * 8;
             self.rbuf.resize(slen_bytes, 0);
             decoder.read_exact(&mut self.rbuf[0..slen_bytes])?;
             for chunk in self.rbuf.chunks_exact(8) {
@@ -224,6 +224,7 @@ impl<'a> RefRecord<'a> {
     pub fn flag(&self) -> u64 {
         self.flag
     }
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> u64 {
         self.len
     }

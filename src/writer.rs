@@ -37,7 +37,7 @@ pub fn record_byte_size_quality(ebuf: &[u64], slen: usize) -> usize {
 ///
 /// The writing step is composed of two main steps:
 /// 1. Check if the current block can handle the next `Record` and if not, write the
-///   block header (at the appropriate position) and start a new block.
+///    block header (at the appropriate position) and start a new block.
 /// 2. Write the `Record` to the current block.
 pub struct VBinseqWriter<W: Write> {
     /// Inner Writer
@@ -72,7 +72,7 @@ impl<W: Write> VBinseqWriter<W> {
 
     pub fn write_nucleotides(&mut self, flag: u64, sequence: &[u8]) -> Result<bool> {
         // Validate the right write operation is being used
-        if self.header.qual == true {
+        if self.header.qual {
             return Err(WriteError::QualityFlagSet.into());
         }
 
@@ -104,7 +104,7 @@ impl<W: Write> VBinseqWriter<W> {
         quality: &[u8],
     ) -> Result<bool> {
         // Validate the right write operation is being used
-        if self.header.qual == false {
+        if self.header.qual {
             return Err(WriteError::QualityFlagNotSet.into());
         }
 
