@@ -1,11 +1,11 @@
 use std::{
     fs::File,
-    io::{BufWriter, Write},
+    io::{BufReader, BufWriter, Read, Write},
     path::Path,
 };
 
 use byteorder::{ByteOrder, LittleEndian};
-use zstd::Encoder;
+use zstd::{Decoder, Encoder};
 
 use crate::{
     header::{SIZE_BLOCK_HEADER, SIZE_HEADER},
@@ -113,6 +113,27 @@ impl BlockIndex {
         }
 
         Ok(index)
+    }
+
+    /// Reads an index from a path
+    pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let buffer = {
+            let mut buffer = Vec::new();
+            let mut handle = File::open(path).map(BufReader::new).map(Decoder::new)??;
+            handle.read_to_end(&mut buffer)?;
+            buffer
+        };
+
+        let mut ranges = Self::default();
+        let mut pos = 0;
+        while pos < buffer.len() {
+            let bound = pos + SIZE_BLOCK_RANGE;
+            let range = BlockRange::from_bytes(&buffer[pos..bound]);
+            ranges.add_range(range);
+            pos += SIZE_BLOCK_RANGE;
+        }
+
+        Ok(ranges)
     }
 
     pub fn pprint(&self) {
