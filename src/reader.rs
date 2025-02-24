@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::{fs::File, io::Read};
 
-use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
+use byteorder::{ByteOrder, LittleEndian};
 use memmap2::Mmap;
 use zstd::Decoder;
 
@@ -119,13 +119,14 @@ impl RecordBlock {
                 break;
             }
 
-            // Read the flag and advance the position
-            let flag = decoder.read_u64::<LittleEndian>()?;
-            pos += 8;
+            // Pull the preambles out of the compressed block and advance the position
+            let mut preamble = [0u8; 16];
+            decoder.read_exact(&mut preamble)?;
+            pos += 16;
 
-            // Read the length and advance the position
-            let len = decoder.read_u64::<LittleEndian>()?;
-            pos += 8;
+            // Read the flag + len
+            let flag = LittleEndian::read_u64(&preamble[0..8]);
+            let len = LittleEndian::read_u64(&preamble[8..16]);
 
             // No more records in the block
             if len == 0 {
