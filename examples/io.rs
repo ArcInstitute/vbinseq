@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{BufWriter, Read},
+    io::{stdout, BufWriter, Read, Write},
 };
 
 use anyhow::Result;
@@ -64,21 +64,44 @@ fn write_set(
 fn read_set(filepath: &str) -> Result<()> {
     eprintln!("Reading sequences from {}", filepath);
 
+    let mut writer = BufWriter::new(stdout());
     let mut reader = MmapReader::new(filepath)?;
     let mut block = reader.new_block();
 
     let mut n_records = 0;
     let mut n_blocks = 0;
     let mut dbuf = Vec::new();
+    let mut qbuf = Vec::new();
     while reader.read_block_into(&mut block)? {
-        n_records += block.n_records();
         for record in block.iter() {
             record.decode_into(&mut dbuf)?;
+
+            let seq_str = std::str::from_utf8(&dbuf)?;
+
+            if record.quality().is_empty() {
+                // write dummy quality scores
+                qbuf.resize(dbuf.len(), b'?');
+                let qual_str = std::str::from_utf8(&qbuf)?;
+                writeln!(
+                    &mut writer,
+                    "@seq.{}\n{}\n+\n{}",
+                    n_records, seq_str, qual_str
+                )?;
+            } else {
+                let qual_str = std::str::from_utf8(record.quality())?;
+                writeln!(
+                    &mut writer,
+                    "@seq.{}\n{}\n+\n{}",
+                    n_records, seq_str, qual_str
+                )?;
+            }
             dbuf.clear();
+            n_records += 1;
         }
         n_blocks += 1;
         // eprintln!("Read {} records from block {}", block.n_records(), n_blocks);
     }
+    writer.flush()?;
 
     eprintln!("Read {} records from {} blocks", n_records, n_blocks);
     Ok(())
