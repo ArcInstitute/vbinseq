@@ -17,10 +17,13 @@ const FORMAT: u8 = 1;
 pub const SIZE_HEADER: usize = 32;
 
 /// Size of the block header in bytes
-pub const SIZE_BLOCK_HEADER: usize = 8;
+pub const SIZE_BLOCK_HEADER: usize = 16;
 
 /// Default block size: 64KB
 pub const BLOCK_SIZE: u64 = 128 * 1024;
+
+/// Reserved bytes for future use
+pub const RESERVED_BYTES: [u8; 17] = [42; 17];
 
 #[derive(Clone, Copy)]
 pub struct VBinseqHeader {
@@ -44,28 +47,34 @@ pub struct VBinseqHeader {
     /// 1 byte
     pub qual: bool,
 
+    /// Internal blocks are zstd compressed
+    ///
+    /// 1 byte
+    pub compressed: bool,
+
     /// Reserved remaining bytes for future use
     ///
-    /// 18 bytes
-    pub reserved: [u8; 18],
+    /// 17 bytes
+    pub reserved: [u8; 17],
 }
 impl Default for VBinseqHeader {
     fn default() -> Self {
-        Self::with_capacity(BLOCK_SIZE, false)
+        Self::with_capacity(BLOCK_SIZE, false, false)
     }
 }
 impl VBinseqHeader {
-    pub fn new(qual: bool) -> Self {
-        Self::with_capacity(BLOCK_SIZE, qual)
+    pub fn new(qual: bool, compressed: bool) -> Self {
+        Self::with_capacity(BLOCK_SIZE, qual, compressed)
     }
 
-    pub fn with_capacity(block: u64, qual: bool) -> Self {
+    pub fn with_capacity(block: u64, qual: bool, compressed: bool) -> Self {
         Self {
             magic: MAGIC,
             format: FORMAT,
             block,
             qual,
-            reserved: [42; 18],
+            compressed,
+            reserved: RESERVED_BYTES,
         }
     }
 
@@ -80,7 +89,8 @@ impl VBinseqHeader {
         }
         let block = LittleEndian::read_u64(&buffer[5..13]);
         let qual = buffer[13] != 0;
-        let reserved = match buffer[14..32].try_into() {
+        let compressed = buffer[14] != 0;
+        let reserved = match buffer[15..32].try_into() {
             Ok(reserved) => reserved,
             Err(_) => return Err(HeaderError::InvalidReservedBytes.into()),
         };
@@ -89,6 +99,7 @@ impl VBinseqHeader {
             format,
             block,
             qual,
+            compressed,
             reserved,
         })
     }
@@ -99,7 +110,8 @@ impl VBinseqHeader {
         buffer[4] = self.format;
         LittleEndian::write_u64(&mut buffer[5..13], self.block);
         buffer[13] = if self.qual { 1 } else { 0 };
-        buffer[14..32].copy_from_slice(&self.reserved);
+        buffer[14] = if self.compressed { 1 } else { 0 };
+        buffer[15..32].copy_from_slice(&self.reserved);
         writer.write_all(&buffer)?;
         Ok(())
     }
@@ -113,30 +125,37 @@ impl VBinseqHeader {
 
 #[derive(Clone, Copy)]
 pub struct BlockHeader {
+    /// Magic number to identify the block format
     pub magic: u64,
-}
-impl Default for BlockHeader {
-    fn default() -> Self {
-        Self::new()
-    }
+
+    /// Actual size of the block in bytes
+    ///
+    /// Can vary from the block size in the header
+    /// depending on compression status
+    pub size: u64,
 }
 impl BlockHeader {
-    pub fn new() -> Self {
-        Self { magic: BLOCK_MAGIC }
+    pub fn new(size: u64) -> Self {
+        Self {
+            magic: BLOCK_MAGIC,
+            size,
+        }
     }
 
     pub fn write_bytes<W: Write>(&self, writer: &mut W) -> Result<()> {
-        let mut buffer = [0u8; 8];
-        LittleEndian::write_u64(&mut buffer, self.magic);
+        let mut buffer = [0u8; 16];
+        LittleEndian::write_u64(&mut buffer[0..8], self.magic);
+        LittleEndian::write_u64(&mut buffer[8..16], self.size);
         writer.write_all(&buffer)?;
         Ok(())
     }
 
-    pub fn validate(buffer: &[u8], pos: usize) -> Result<()> {
-        let magic = LittleEndian::read_u64(&buffer[pos..pos + 8]);
+    pub fn from_bytes(buffer: &[u8; SIZE_BLOCK_HEADER]) -> Result<Self> {
+        let magic = LittleEndian::read_u64(&buffer[0..8]);
         if magic != BLOCK_MAGIC {
-            return Err(ReadError::InvalidBlockMagicNumber(magic, pos).into());
+            return Err(ReadError::InvalidBlockMagicNumber(magic, 0).into());
         }
-        Ok(())
+        let size = LittleEndian::read_u64(&buffer[8..16]);
+        Ok(Self { magic, size })
     }
 }

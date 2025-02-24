@@ -8,10 +8,15 @@ bitnuc = "0.2.10"
 byteorder = "1.5.0"
 memmap2 = "0.9.5"
 thiserror = "2.0.11"
+zstd = { version = "0.13.3", features = ["zstdmt"] }
 
 [dev-dependencies]
 anyhow = "1.0.96"
+clap = { version = "4.5.30", features = ["derive"] }
 niffler = "3.0.0"
 nucgen = "0.1.2"
 paraseq = "0.1.2"
 rand = "0.8"
+
+[profile.release]
+debug = true
