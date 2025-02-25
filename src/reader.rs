@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs::File, io::Read};
 
@@ -11,6 +11,7 @@ use crate::{
     header::{SIZE_BLOCK_HEADER, SIZE_HEADER},
     BlockHeader, Result, VBinseqHeader,
 };
+use crate::{BlockIndex, BlockRange, ParallelProcessor};
 
 fn encoded_sequence_len(len: u64) -> usize {
     len.div_ceil(32) as usize
@@ -241,6 +242,9 @@ impl<'a> RefRecord<'a> {
 }
 
 pub struct MmapReader {
+    /// Path to the file
+    path: PathBuf,
+
     /// Memory mapped file contents
     mmap: Arc<Mmap>,
 
@@ -253,7 +257,7 @@ pub struct MmapReader {
 impl MmapReader {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         // Verify it's a regular file before attempting to map
-        let file = File::open(path)?;
+        let file = File::open(&path)?;
         if !file.metadata()?.is_file() {
             return Err(ReadError::InvalidFileType.into());
         }
@@ -269,6 +273,7 @@ impl MmapReader {
         };
 
         Ok(Self {
+            path: PathBuf::from(path.as_ref()),
             mmap: Arc::new(mmap),
             header,
             pos: SIZE_HEADER,
@@ -277,6 +282,10 @@ impl MmapReader {
 
     pub fn new_block(&self) -> RecordBlock {
         RecordBlock::new(self.header.block as usize)
+    }
+
+    pub fn index_path(&self) -> PathBuf {
+        self.path.with_extension("vqi")
     }
 
     /// Fill an existing RecordBlock with the next block of records
@@ -313,5 +322,96 @@ impl MmapReader {
         self.pos += rbound;
 
         Ok(true)
+    }
+}
+
+impl MmapReader {
+    /// Process records in parallel using the provided processor
+    ///
+    /// This method uses the block structure to divide work among threads,
+    /// with each thread processing a subset of blocks independently.
+    pub fn process_parallel<P: ParallelProcessor + Clone + 'static>(
+        self,
+        processor: P,
+        num_threads: usize,
+    ) -> Result<()> {
+        // Generate or load the index first
+        let index = if self.index_path().exists() {
+            BlockIndex::from_path(self.index_path())?
+        } else {
+            let idx = BlockIndex::from_vbq(&self.path)?;
+            idx.save_to_path(self.index_path())?;
+            idx
+        };
+
+        // Get the number of blocks
+        let n_blocks = index.n_blocks();
+        if n_blocks == 0 {
+            return Ok(()); // Nothing to process
+        }
+
+        // Calculate block assignments
+        let blocks_per_thread = n_blocks.div_ceil(num_threads);
+
+        // Create shared resources
+        let mmap = Arc::clone(&self.mmap);
+        let header = self.header;
+
+        // Spawn worker threads
+        let mut handles = Vec::new();
+
+        for thread_id in 0..num_threads {
+            let mmap = Arc::clone(&mmap);
+            let mut proc = processor.clone();
+            proc.set_tid(thread_id);
+
+            // Calculate this thread's block range
+            let start_block = thread_id * blocks_per_thread;
+            let end_block = std::cmp::min((thread_id + 1) * blocks_per_thread, n_blocks);
+
+            // Get block ranges for this thread
+            let blocks: Vec<BlockRange> = index.ranges()[start_block..end_block].to_vec();
+
+            let handle = std::thread::spawn(move || -> Result<()> {
+                // Create block to reuse for processing (within thread)
+                let mut record_block = RecordBlock::new(header.block as usize);
+
+                // Process each assigned block
+                for block_range in blocks {
+                    // Clear the block for reuse
+                    record_block.clear();
+
+                    // Skip the block header to get to data
+                    let block_start = block_range.start_offset as usize + SIZE_BLOCK_HEADER;
+                    let block_data = &mmap[block_start..block_start + block_range.len as usize];
+
+                    // Ingest data according to the compression setting
+                    if header.compressed {
+                        record_block.ingest_compressed_bytes(block_data, header.qual)?;
+                    } else {
+                        record_block.ingest_bytes(block_data, header.qual)?;
+                    }
+
+                    // Process each record in the block
+                    for record in record_block.iter() {
+                        proc.process_record(record)?;
+                    }
+
+                    // Signal batch completion
+                    proc.on_batch_complete()?;
+                }
+
+                Ok(())
+            });
+
+            handles.push(handle);
+        }
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().unwrap()?;
+        }
+
+        Ok(())
     }
 }
