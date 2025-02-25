@@ -136,6 +136,11 @@ impl BlockIndex {
         Ok(ranges)
     }
 
+    /// Get a reference to the internal ranges
+    pub fn ranges(&self) -> &[BlockRange] {
+        &self.ranges
+    }
+
     pub fn pprint(&self) {
         self.ranges.iter().for_each(|range| {
             println!("{}\t{}", range.start_offset, range.len);
