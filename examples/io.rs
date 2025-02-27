@@ -39,7 +39,7 @@ fn write_set(
         output_filepath, compress, write_quality
     );
     let handle = File::create(output_filepath).map(BufWriter::new)?;
-    let header = VBinseqHeader::new(write_quality, compress);
+    let header = VBinseqHeader::new(write_quality, compress, false);
     let mut writer = VBinseqWriter::new(handle, header)?;
 
     let mut rnum = 0;
