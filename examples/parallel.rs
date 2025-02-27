@@ -44,10 +44,10 @@ impl ParallelProcessor for Decoder {
         self.dbuf.clear();
 
         // decode sequence
-        record.decode_into(&mut self.dbuf)?;
+        record.decode_s(&mut self.dbuf)?;
 
         // write fastq to local buffer
-        write_fastq(&mut self.buffer, &self.dbuf, record.quality())?;
+        write_fastq(&mut self.buffer, &self.dbuf, record.squal())?;
 
         self.local_records += 1;
 

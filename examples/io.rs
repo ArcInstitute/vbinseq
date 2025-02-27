@@ -18,6 +18,8 @@ struct Args {
     compress: bool,
     #[clap(short = 'q', long)]
     write_quality: bool,
+    #[clap(short = 'p', long)]
+    paired: bool,
     #[clap(short = 's', long)]
     skip_write: bool,
     #[clap(short = 'S', long)]
@@ -61,6 +63,43 @@ fn write_set(
     Ok(())
 }
 
+fn write_paired_set(
+    input_filepath: &str,
+    output_filepath: &str,
+    compress: bool,
+    write_quality: bool,
+) -> Result<()> {
+    let in_handle = match_input(input_filepath)?;
+    let mut reader = fastq::Reader::new(in_handle);
+    let mut rset = fastq::RecordSet::default();
+
+    eprintln!(
+        "Writing sequences to {} (compress: {}, with_quality: {})",
+        output_filepath, compress, write_quality
+    );
+    let handle = File::create(output_filepath).map(BufWriter::new)?;
+    let header = VBinseqHeader::new(write_quality, compress, true);
+    let mut writer = VBinseqWriter::new(handle, header)?;
+
+    let mut rnum = 0;
+    while rset.fill(&mut reader)? {
+        for record in rset.iter() {
+            let record = record?;
+            let seq = record.seq();
+            let qual = record.qual();
+            if write_quality {
+                writer.write_nucleotides_quality_paired(rnum, seq, seq, qual, qual)?;
+            } else {
+                writer.write_nucleotides_paired(rnum, seq, seq)?;
+            }
+            rnum += 1;
+        }
+    }
+    eprintln!("Finished writing {} sequences to {}", rnum, output_filepath);
+
+    Ok(())
+}
+
 fn read_set(filepath: &str) -> Result<()> {
     eprintln!("Reading sequences from {}", filepath);
 
@@ -74,11 +113,11 @@ fn read_set(filepath: &str) -> Result<()> {
     let mut qbuf = Vec::new();
     while reader.read_block_into(&mut block)? {
         for record in block.iter() {
-            record.decode_into(&mut dbuf)?;
+            record.decode_s(&mut dbuf)?;
 
             let seq_str = std::str::from_utf8(&dbuf)?;
 
-            if record.quality().is_empty() {
+            if record.squal().is_empty() {
                 // write dummy quality scores
                 qbuf.resize(dbuf.len(), b'?');
                 let qual_str = std::str::from_utf8(&qbuf)?;
@@ -88,7 +127,7 @@ fn read_set(filepath: &str) -> Result<()> {
                     n_records, seq_str, qual_str
                 )?;
             } else {
-                let qual_str = std::str::from_utf8(record.quality())?;
+                let qual_str = std::str::from_utf8(record.squal())?;
                 writeln!(
                     &mut writer,
                     "@seq.{}\n{}\n+\n{}",
@@ -96,6 +135,70 @@ fn read_set(filepath: &str) -> Result<()> {
                 )?;
             }
             dbuf.clear();
+            n_records += 1;
+        }
+        n_blocks += 1;
+        // eprintln!("Read {} records from block {}", block.n_records(), n_blocks);
+    }
+    writer.flush()?;
+
+    eprintln!("Read {} records from {} blocks", n_records, n_blocks);
+    Ok(())
+}
+
+fn read_paired_set(filepath: &str) -> Result<()> {
+    eprintln!("Reading sequences from {}", filepath);
+
+    let mut writer = BufWriter::new(stdout());
+    let mut reader = MmapReader::new(filepath)?;
+    let mut block = reader.new_block();
+
+    let mut n_records = 0;
+    let mut n_blocks = 0;
+    let mut sbuf = Vec::new();
+    let mut xbuf = Vec::new();
+    let mut squal = Vec::new();
+    let mut xqual = Vec::new();
+    while reader.read_block_into(&mut block)? {
+        for record in block.iter() {
+            record.decode_s(&mut sbuf)?;
+            record.decode_x(&mut xbuf)?;
+
+            let s_seq_str = std::str::from_utf8(&sbuf)?;
+            let x_seq_str = std::str::from_utf8(&xbuf)?;
+
+            if record.squal().is_empty() {
+                // write dummy quality scores
+                squal.resize(sbuf.len(), b'?');
+                xqual.resize(xbuf.len(), b'?');
+                let s_qual_str = std::str::from_utf8(&squal)?;
+                let x_qual_str = std::str::from_utf8(&xqual)?;
+                writeln!(
+                    &mut writer,
+                    "@seq.{}/1\n{}\n+\n{}",
+                    n_records, s_seq_str, s_qual_str
+                )?;
+                writeln!(
+                    &mut writer,
+                    "@seq.{}/2\n{}\n+\n{}",
+                    n_records, x_seq_str, x_qual_str
+                )?;
+            } else {
+                let s_qual_str = std::str::from_utf8(record.squal())?;
+                let x_qual_str = std::str::from_utf8(record.xqual())?;
+                writeln!(
+                    &mut writer,
+                    "@seq.{}/1\n{}\n+\n{}",
+                    n_records, s_seq_str, s_qual_str
+                )?;
+                writeln!(
+                    &mut writer,
+                    "@seq.{}/2\n{}\n+\n{}",
+                    n_records, x_seq_str, x_qual_str
+                )?;
+            }
+            sbuf.clear();
+            xbuf.clear();
             n_records += 1;
         }
         n_blocks += 1;
@@ -115,10 +218,18 @@ fn match_input(filepath: &str) -> Result<Box<dyn Read + Send>> {
 pub fn main() -> Result<()> {
     let args = Args::parse();
     if !args.skip_write {
-        write_set(&args.input, &args.output, args.compress, args.write_quality)?;
+        if args.paired {
+            write_paired_set(&args.input, &args.output, args.compress, args.write_quality)?;
+        } else {
+            write_set(&args.input, &args.output, args.compress, args.write_quality)?;
+        }
     }
     if !args.skip_read {
-        read_set(&args.output)?;
+        if args.paired {
+            read_paired_set(&args.output)?;
+        } else {
+            read_set(&args.output)?;
+        }
     }
     Ok(())
 }
