@@ -75,6 +75,9 @@ impl<W: Write> VBinseqWriter<W> {
         if self.header.qual {
             return Err(WriteError::QualityFlagSet.into());
         }
+        if self.header.paired {
+            return Err(WriteError::PairedFlagSet.into());
+        }
 
         // encode the sequence
         self.sbuffer.clear();
@@ -106,6 +109,9 @@ impl<W: Write> VBinseqWriter<W> {
         // Validate the right write operation is being used
         if !self.header.qual {
             return Err(WriteError::QualityFlagNotSet.into());
+        }
+        if self.header.paired {
+            return Err(WriteError::PairedFlagSet.into());
         }
 
         // encode the sequence
