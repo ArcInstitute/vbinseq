@@ -5,10 +5,10 @@ use byteorder::{ByteOrder, LittleEndian};
 use crate::error::{HeaderError, ReadError, Result};
 
 /// Current magic number: "VSEQ" in ASCII
-const MAGIC: u32 = 0x56534551;
+const MAGIC: u32 = 0x51455356;
 
 /// Current magic number: "BLOCKSEQ"
-const BLOCK_MAGIC: u64 = 0x424C4F434B534551;
+const BLOCK_MAGIC: u64 = 0x5145534B434F4C42;
 
 /// Current format version
 const FORMAT: u8 = 1;
