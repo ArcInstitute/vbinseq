@@ -67,8 +67,8 @@ impl RecordBlock {
         let mut pos = 0;
         loop {
             // Check that we have enough bytes to at least read the flag
-            // and length. If not, break out of the loop.
-            if pos + 16 > bytes.len() {
+            // and lengths. If not, break out of the loop.
+            if pos + 24 > bytes.len() {
                 break;
             }
 
@@ -76,12 +76,16 @@ impl RecordBlock {
             let flag = LittleEndian::read_u64(&bytes[pos..pos + 8]);
             pos += 8;
 
-            // Read the length and advance the position
-            let len = LittleEndian::read_u64(&bytes[pos..pos + 8]);
+            // Read the primary length and advance the position
+            let slen = LittleEndian::read_u64(&bytes[pos..pos + 8]);
+            pos += 8;
+
+            // Read the extended length and advance the position
+            let xlen = LittleEndian::read_u64(&bytes[pos..pos + 8]);
             pos += 8;
 
             // No more records in the block
-            if len == 0 {
+            if slen == 0 {
                 // It is possible to end up here if the block is not full
                 // In this case the flag and the length are both zero
                 // and effectively blank but initialized memory.
@@ -90,20 +94,36 @@ impl RecordBlock {
 
             // Add the record to the block
             self.flags.push(flag);
-            self.lens.push(len);
+            self.lens.push(slen);
+            self.lens.push(xlen);
 
+            // Add the primary sequence to the block
             let mut seq = [0u8; 8];
-            for _ in 0..encoded_sequence_len(len) {
+            for _ in 0..encoded_sequence_len(slen) {
                 seq.copy_from_slice(&bytes[pos..pos + 8]);
                 self.sequences.push(LittleEndian::read_u64(&seq));
                 pos += 8;
             }
 
-            // Add the quality score to the block
+            // Add the primary quality score to the block
             if has_quality {
-                let qual_buffer = &bytes[pos..pos + len as usize];
+                let qual_buffer = &bytes[pos..pos + slen as usize];
                 self.qualities.extend_from_slice(qual_buffer);
-                pos += len as usize;
+                pos += slen as usize;
+            }
+
+            // Add the extended sequence to the block
+            for _ in 0..encoded_sequence_len(xlen) {
+                seq.copy_from_slice(&bytes[pos..pos + 8]);
+                self.sequences.push(LittleEndian::read_u64(&seq));
+                pos += 8;
+            }
+
+            // Add the extended quality score to the block
+            if has_quality {
+                let qual_buffer = &bytes[pos..pos + xlen as usize];
+                self.qualities.extend_from_slice(qual_buffer);
+                pos += xlen as usize;
             }
         }
         Ok(())
@@ -115,22 +135,23 @@ impl RecordBlock {
         let mut pos = 0;
         loop {
             // Check that we have enough bytes to at least read the flag
-            // and length. If not, break out of the loop.
-            if pos + 16 > self.block_size {
+            // and lengths. If not, break out of the loop.
+            if pos + 24 > self.block_size {
                 break;
             }
 
             // Pull the preambles out of the compressed block and advance the position
-            let mut preamble = [0u8; 16];
+            let mut preamble = [0u8; 24];
             decoder.read_exact(&mut preamble)?;
-            pos += 16;
+            pos += 24;
 
-            // Read the flag + len
+            // Read the flag + lengths
             let flag = LittleEndian::read_u64(&preamble[0..8]);
-            let len = LittleEndian::read_u64(&preamble[8..16]);
+            let slen = LittleEndian::read_u64(&preamble[8..16]);
+            let xlen = LittleEndian::read_u64(&preamble[16..24]);
 
             // No more records in the block
-            if len == 0 {
+            if slen == 0 {
                 // It is possible to end up here if the block is not full
                 // In this case the flag and the length are both zero
                 // and effectively blank but initialized memory.
@@ -139,27 +160,49 @@ impl RecordBlock {
 
             // Add the record to the block
             self.flags.push(flag);
-            self.lens.push(len);
+            self.lens.push(slen);
+            self.lens.push(xlen);
 
             // Read the sequence and advance the position
-            let slen = encoded_sequence_len(len);
-            let slen_bytes = slen * 8;
-            self.rbuf.resize(slen_bytes, 0);
-            decoder.read_exact(&mut self.rbuf[0..slen_bytes])?;
+            let schunk = encoded_sequence_len(slen);
+            let schunk_bytes = schunk * 8;
+            self.rbuf.resize(schunk_bytes, 0);
+            decoder.read_exact(&mut self.rbuf[0..schunk_bytes])?;
             for chunk in self.rbuf.chunks_exact(8) {
                 let seq_part = LittleEndian::read_u64(chunk);
                 self.sequences.push(seq_part);
             }
             self.rbuf.clear();
-            pos += slen_bytes;
+            pos += schunk_bytes;
 
             // Add the quality score to the block
             if has_quality {
-                self.rbuf.resize(len as usize, 0);
-                decoder.read_exact(&mut self.rbuf[0..len as usize])?;
+                self.rbuf.resize(slen as usize, 0);
+                decoder.read_exact(&mut self.rbuf[0..slen as usize])?;
                 self.qualities.extend_from_slice(&self.rbuf);
                 self.rbuf.clear();
-                pos += len as usize;
+                pos += slen as usize;
+            }
+
+            // Read the sequence and advance the position
+            let xchunk = encoded_sequence_len(xlen);
+            let xchunk_bytes = xchunk * 8;
+            self.rbuf.resize(xchunk_bytes, 0);
+            decoder.read_exact(&mut self.rbuf[0..xchunk_bytes])?;
+            for chunk in self.rbuf.chunks_exact(8) {
+                let seq_part = LittleEndian::read_u64(chunk);
+                self.sequences.push(seq_part);
+            }
+            self.rbuf.clear();
+            pos += xchunk_bytes;
+
+            // Add the quality score to the block
+            if has_quality {
+                self.rbuf.resize(xlen as usize, 0);
+                decoder.read_exact(&mut self.rbuf[0..xlen as usize])?;
+                self.qualities.extend_from_slice(&self.rbuf);
+                self.rbuf.clear();
+                pos += xlen as usize;
             }
         }
         Ok(())
@@ -190,53 +233,92 @@ impl<'a> Iterator for RecordBlockIter<'a> {
             return None;
         }
         let flag = self.block.flags[self.rpos];
-        let len = self.block.lens[self.rpos];
-        let elen = encoded_sequence_len(len);
-        let sequence = &self.block.sequences[self.epos..self.epos + elen];
+        let slen = self.block.lens[2 * self.rpos];
+        let xlen = self.block.lens[(2 * self.rpos) + 1];
+        let schunk = encoded_sequence_len(slen);
+        let xchunk = encoded_sequence_len(xlen);
 
-        let quality = if self.block.qualities.is_empty() {
+        let s_seq = &self.block.sequences[self.epos..self.epos + schunk];
+        let s_qual = if self.block.qualities.is_empty() {
             &[]
         } else {
-            &self.block.qualities[self.epos..self.epos + len as usize]
+            &self.block.qualities[self.epos..self.epos + slen as usize]
         };
+        self.epos += schunk;
 
+        let x_seq = &self.block.sequences[self.epos..self.epos + xchunk];
+        let x_qual = if self.block.qualities.is_empty() {
+            &[]
+        } else {
+            &self.block.qualities[self.epos..self.epos + xlen as usize]
+        };
+        self.epos += xchunk;
+
+        // update record position
         self.rpos += 1;
-        self.epos += elen;
 
-        Some(RefRecord::new(flag, len, sequence, quality))
+        Some(RefRecord::new(
+            flag, slen, xlen, s_seq, x_seq, s_qual, x_qual,
+        ))
     }
 }
 
 pub struct RefRecord<'a> {
     flag: u64,
-    len: u64,
-    sequence: &'a [u64],
-    quality: &'a [u8],
+    slen: u64,
+    xlen: u64,
+    sbuf: &'a [u64],
+    xbuf: &'a [u64],
+    squal: &'a [u8],
+    xqual: &'a [u8],
 }
 impl<'a> RefRecord<'a> {
-    pub fn new(flag: u64, len: u64, sequence: &'a [u64], quality: &'a [u8]) -> Self {
+    pub fn new(
+        flag: u64,
+        slen: u64,
+        xlen: u64,
+        sbuf: &'a [u64],
+        xbuf: &'a [u64],
+        squal: &'a [u8],
+        xqual: &'a [u8],
+    ) -> Self {
         Self {
             flag,
-            len,
-            sequence,
-            quality,
+            slen,
+            xlen,
+            sbuf,
+            xbuf,
+            squal,
+            xqual,
         }
     }
     pub fn flag(&self) -> u64 {
         self.flag
     }
-    #[allow(clippy::len_without_is_empty)]
-    pub fn len(&self) -> u64 {
-        self.len
+    pub fn slen(&self) -> u64 {
+        self.slen
     }
-    pub fn sequence(&self) -> &[u64] {
-        self.sequence
+    pub fn xlen(&self) -> u64 {
+        self.xlen
     }
-    pub fn quality(&self) -> &[u8] {
-        self.quality
+    pub fn sbuf(&self) -> &[u64] {
+        self.sbuf
     }
-    pub fn decode_into(&self, dbuf: &mut Vec<u8>) -> Result<()> {
-        bitnuc::decode(self.sequence, self.len as usize, dbuf)?;
+    pub fn xbuf(&self) -> &[u64] {
+        self.xbuf
+    }
+    pub fn squal(&self) -> &[u8] {
+        self.squal
+    }
+    pub fn xqual(&self) -> &[u8] {
+        self.xqual
+    }
+    pub fn decode_s(&self, dbuf: &mut Vec<u8>) -> Result<()> {
+        bitnuc::decode(self.sbuf, self.slen as usize, dbuf)?;
+        Ok(())
+    }
+    pub fn decode_x(&self, dbuf: &mut Vec<u8>) -> Result<()> {
+        bitnuc::decode(self.xbuf, self.xlen as usize, dbuf)?;
         Ok(())
     }
 }

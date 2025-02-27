@@ -28,6 +28,8 @@ pub enum WriteError {
     QualityFlagNotSet,
     #[error("Paired flag not set in header but trying to write with record pair.")]
     PairedFlagNotSet,
+    #[error("Encountered a record with embedded size {0} but the maximum block size is {1}. Rerun with increased block size.")]
+    RecordSizeExceedsMaximumBlockSize(usize, usize),
 }
 
 #[derive(thiserror::Error, Debug)]
