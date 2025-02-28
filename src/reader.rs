@@ -367,7 +367,9 @@ impl MmapReader {
     }
 
     pub fn index_path(&self) -> PathBuf {
-        self.path.with_extension("vqi")
+        let mut p = self.path.as_os_str().to_owned();
+        p.push(".vqi");
+        p.into()
     }
 
     /// Fill an existing RecordBlock with the next block of records
