@@ -22,8 +22,14 @@ pub enum Error {
 pub enum WriteError {
     #[error("Quality flag is set in header but trying to write without quality scores.")]
     QualityFlagSet,
+    #[error("Paired flag is set in header but trying to write without record pair.")]
+    PairedFlagSet,
     #[error("Quality flag not set in header but trying to write quality scores.")]
     QualityFlagNotSet,
+    #[error("Paired flag not set in header but trying to write with record pair.")]
+    PairedFlagNotSet,
+    #[error("Encountered a record with embedded size {0} but the maximum block size is {1}. Rerun with increased block size.")]
+    RecordSizeExceedsMaximumBlockSize(usize, usize),
 }
 
 #[derive(thiserror::Error, Debug)]

@@ -9,19 +9,23 @@ use crate::header::{BlockHeader, VBinseqHeader};
 /// The record byte size is the size of the embedded buffer in bytes
 /// as well as the size of the flag and length of the buffer.
 ///
-/// S = wL + 2w
+/// S = w(Cs + Cx + 3)
 ///
-/// where S is the size of the record in bytes, L is the length of the buffer,
-/// and w is the word size (1byte)
-pub fn record_byte_size(ebuf: &[u64]) -> usize {
-    (8 * ebuf.len()) + (2 * 8)
+/// Where:
+/// - w: word size (8 bytes)
+/// - Cs: Chunk size (primary sequence)
+/// - Cx: Chunk size (extended sequence)
+/// - 3: flag + slen + xlen
+pub fn record_byte_size(schunk: usize, xchunk: usize) -> usize {
+    8 * (schunk + xchunk + 3)
 }
 
 /// The record byte size is the size of the embedded buffer in bytes
-/// plus the size of the flag and sequence length as two separate u64 fields.
+/// plus the preamble (flag + slen + xlen)
+///
 /// This also includes the quality score length which is 1 byte per base.
-pub fn record_byte_size_quality(ebuf: &[u64], slen: usize) -> usize {
-    (8 * ebuf.len()) + (2 * 8) + slen
+pub fn record_byte_size_quality(schunk: usize, xchunk: usize, slen: usize, xlen: usize) -> usize {
+    record_byte_size(schunk, xchunk) + slen + xlen
 }
 
 /// A writer for the VBinseq format.
@@ -46,8 +50,11 @@ pub struct VBinseqWriter<W: Write> {
     /// Header of the file
     header: VBinseqHeader,
 
-    /// Reusable buffer for all nucleotides (written as 2-bit after conversion)
+    /// Reusable buffer for all primary nucleotides (written as 2-bit after conversion)
     sbuffer: Vec<u64>,
+
+    /// Reusable buffer for all extended nucleotides (written as 2-bit after conversion)
+    xbuffer: Vec<u64>,
 
     /// Pre-initialized writer for compressed blocks
     cblock: BlockWriter,
@@ -58,6 +65,7 @@ impl<W: Write> VBinseqWriter<W> {
             inner,
             header,
             sbuffer: Vec::new(),
+            xbuffer: Vec::new(),
             cblock: BlockWriter::new(header.block as usize, header.compressed),
         };
         wtr.init()?;
@@ -75,6 +83,9 @@ impl<W: Write> VBinseqWriter<W> {
         if self.header.qual {
             return Err(WriteError::QualityFlagSet.into());
         }
+        if self.header.paired {
+            return Err(WriteError::PairedFlagSet.into());
+        }
 
         // encode the sequence
         self.sbuffer.clear();
@@ -83,15 +94,57 @@ impl<W: Write> VBinseqWriter<W> {
         }
 
         // Check if the current block can handle the next record
-        let record_size = record_byte_size(&self.sbuffer);
-        if self.cblock.exceeds_block_size(record_size) {
+        let record_size = record_byte_size(self.sbuffer.len(), 0);
+        if self.cblock.exceeds_block_size(record_size)? {
             self.cblock.flush(&mut self.inner)?;
         }
 
         // Write the flag, length, and sequence to the block
         self.cblock.write_flag(flag)?;
         self.cblock.write_length(sequence.len() as u64)?;
+        self.cblock.write_length(0)?;
         self.cblock.write_buffer(&self.sbuffer)?;
+
+        Ok(true)
+    }
+
+    pub fn write_nucleotides_paired(
+        &mut self,
+        flag: u64,
+        primary: &[u8],
+        extended: &[u8],
+    ) -> Result<bool> {
+        // Validate the right write operation is being used
+        if self.header.qual {
+            return Err(WriteError::QualityFlagSet.into());
+        }
+        if !self.header.paired {
+            return Err(WriteError::PairedFlagNotSet.into());
+        }
+
+        // encode the sequence
+        self.sbuffer.clear();
+        if bitnuc::encode(primary, &mut self.sbuffer).is_err() {
+            return Ok(false);
+        }
+
+        self.xbuffer.clear();
+        if bitnuc::encode(extended, &mut self.xbuffer).is_err() {
+            return Ok(false);
+        }
+
+        // Check if the current block can handle the next record
+        let record_size = record_byte_size(self.sbuffer.len(), self.xbuffer.len());
+        if self.cblock.exceeds_block_size(record_size)? {
+            self.cblock.flush(&mut self.inner)?;
+        }
+
+        // Write the flag, length, and sequence to the block
+        self.cblock.write_flag(flag)?;
+        self.cblock.write_length(primary.len() as u64)?;
+        self.cblock.write_length(extended.len() as u64)?;
+        self.cblock.write_buffer(&self.sbuffer)?;
+        self.cblock.write_buffer(&self.xbuffer)?;
 
         Ok(true)
     }
@@ -107,6 +160,9 @@ impl<W: Write> VBinseqWriter<W> {
         if !self.header.qual {
             return Err(WriteError::QualityFlagNotSet.into());
         }
+        if self.header.paired {
+            return Err(WriteError::PairedFlagSet.into());
+        }
 
         // encode the sequence
         self.sbuffer.clear();
@@ -115,16 +171,67 @@ impl<W: Write> VBinseqWriter<W> {
         }
 
         // Check if the current block can handle the next record
-        let record_size = record_byte_size_quality(&self.sbuffer, quality.len());
-        if self.cblock.exceeds_block_size(record_size) {
+        let record_size = record_byte_size_quality(self.sbuffer.len(), 0, quality.len(), 0);
+        if self.cblock.exceeds_block_size(record_size)? {
             self.cblock.flush(&mut self.inner)?;
         }
 
         // Write the flag, length, sequence, and quality scores to the block
         self.cblock.write_flag(flag)?;
         self.cblock.write_length(sequence.len() as u64)?;
+        self.cblock.write_length(0)?;
         self.cblock.write_buffer(&self.sbuffer)?;
         self.cblock.write_quality(quality)?;
+
+        Ok(true)
+    }
+
+    /// Writes paired nucleotides and quality scores to the writer.
+    pub fn write_nucleotides_quality_paired(
+        &mut self,
+        flag: u64,
+        s_seq: &[u8],
+        x_seq: &[u8],
+        s_qual: &[u8],
+        x_qual: &[u8],
+    ) -> Result<bool> {
+        // Validate the right write operation is being used
+        if !self.header.qual {
+            return Err(WriteError::QualityFlagNotSet.into());
+        }
+        if !self.header.paired {
+            return Err(WriteError::PairedFlagNotSet.into());
+        }
+
+        // encode the sequence
+        self.sbuffer.clear();
+        if bitnuc::encode(s_seq, &mut self.sbuffer).is_err() {
+            return Ok(false);
+        }
+        self.xbuffer.clear();
+        if bitnuc::encode(x_seq, &mut self.xbuffer).is_err() {
+            return Ok(false);
+        }
+
+        // Check if the current block can handle the next record
+        let record_size = record_byte_size_quality(
+            self.sbuffer.len(),
+            self.xbuffer.len(),
+            s_qual.len(),
+            x_qual.len(),
+        );
+        if self.cblock.exceeds_block_size(record_size)? {
+            self.cblock.flush(&mut self.inner)?;
+        }
+
+        // Write the flag, length, sequence, and quality scores to the block
+        self.cblock.write_flag(flag)?;
+        self.cblock.write_length(s_seq.len() as u64)?;
+        self.cblock.write_length(x_seq.len() as u64)?;
+        self.cblock.write_buffer(&self.sbuffer)?;
+        self.cblock.write_quality(s_qual)?;
+        self.cblock.write_buffer(&self.xbuffer)?;
+        self.cblock.write_quality(x_qual)?;
 
         Ok(true)
     }
@@ -174,8 +281,15 @@ impl BlockWriter {
         }
     }
 
-    fn exceeds_block_size(&self, record_size: usize) -> bool {
-        self.pos + record_size > self.block_size
+    fn exceeds_block_size(&self, record_size: usize) -> Result<bool> {
+        if record_size > self.block_size {
+            return Err(WriteError::RecordSizeExceedsMaximumBlockSize(
+                record_size,
+                self.block_size,
+            )
+            .into());
+        }
+        Ok(self.pos + record_size > self.block_size)
     }
 
     fn write_flag(&mut self, flag: u64) -> Result<()> {

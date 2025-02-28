@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::Result;
 use parking_lot::Mutex;
-use vbinseq::{BlockIndex, MmapReader, ParallelProcessor, RefRecord};
+use vbinseq::{MmapReader, ParallelProcessor, RefRecord};
 
 /// A struct for decoding VBINSEQ data back to FASTQ format.
 #[derive(Clone)]
@@ -44,10 +44,10 @@ impl ParallelProcessor for Decoder {
         self.dbuf.clear();
 
         // decode sequence
-        record.decode_into(&mut self.dbuf)?;
+        record.decode_s(&mut self.dbuf)?;
 
         // write fastq to local buffer
-        write_fastq(&mut self.buffer, &self.dbuf, record.quality())?;
+        write_fastq(&mut self.buffer, &self.dbuf, record.squal())?;
 
         self.local_records += 1;
 
@@ -110,13 +110,6 @@ fn main() -> Result<()> {
         .nth(2)
         .unwrap_or("8".to_string())
         .parse::<usize>()?;
-
-    // Index the test data
-    let index_path = format!("{test_file}.vqi");
-    if !std::path::Path::new(&index_path).exists() {
-        let index = BlockIndex::from_vbq(&test_file)?;
-        index.save_to_path(&index_path)?;
-    }
 
     // Output handle
     let writer = match_output(None)?;
