@@ -445,13 +445,16 @@ impl MmapReader {
         let mut handles = Vec::new();
 
         for thread_id in 0..num_threads {
-            let mmap = Arc::clone(&mmap);
-            let mut proc = processor.clone();
-            proc.set_tid(thread_id);
-
             // Calculate this thread's block range
             let start_block = thread_id * blocks_per_thread;
             let end_block = std::cmp::min((thread_id + 1) * blocks_per_thread, n_blocks);
+            if start_block > n_blocks {
+                continue;
+            }
+
+            let mmap = Arc::clone(&mmap);
+            let mut proc = processor.clone();
+            proc.set_tid(thread_id);
 
             // Get block ranges for this thread
             let blocks: Vec<BlockRange> = index.ranges()[start_block..end_block].to_vec();
