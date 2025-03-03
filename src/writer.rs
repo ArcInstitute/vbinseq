@@ -1,10 +1,13 @@
 use std::io::Write;
 
 use byteorder::{LittleEndian, WriteBytesExt};
+use rand::rngs::ThreadRng;
+use rand::thread_rng;
 use zstd::Encoder;
 
 use crate::error::{Result, WriteError};
 use crate::header::{BlockHeader, VBinseqHeader};
+use crate::Policy;
 
 /// The record byte size is the size of the embedded buffer in bytes
 /// as well as the size of the flag and length of the buffer.
@@ -56,6 +59,16 @@ pub struct VBinseqWriter<W: Write> {
     /// Reusable buffer for all extended nucleotides (written as 2-bit after conversion)
     xbuffer: Vec<u64>,
 
+    /// Reusable buffers for invalid nucleotide sequences
+    s_ibuf: Vec<u8>,
+    x_ibuf: Vec<u8>,
+
+    /// Invalid nucleotide policy
+    policy: Policy,
+
+    /// Random number generator
+    rng: ThreadRng,
+
     /// Pre-initialized writer for compressed blocks
     cblock: BlockWriter,
 }
@@ -66,7 +79,27 @@ impl<W: Write> VBinseqWriter<W> {
             header,
             sbuffer: Vec::new(),
             xbuffer: Vec::new(),
+            s_ibuf: Vec::new(),
+            x_ibuf: Vec::new(),
             cblock: BlockWriter::new(header.block as usize, header.compressed),
+            policy: Policy::default(),
+            rng: thread_rng(),
+        };
+        wtr.init()?;
+        Ok(wtr)
+    }
+
+    pub fn with_policy(inner: W, header: VBinseqHeader, policy: Policy) -> Result<Self> {
+        let mut wtr = Self {
+            inner,
+            header,
+            policy,
+            sbuffer: Vec::new(),
+            xbuffer: Vec::new(),
+            s_ibuf: Vec::new(),
+            x_ibuf: Vec::new(),
+            cblock: BlockWriter::new(header.block as usize, header.compressed),
+            rng: thread_rng(),
         };
         wtr.init()?;
         Ok(wtr)
@@ -90,7 +123,15 @@ impl<W: Write> VBinseqWriter<W> {
         // encode the sequence
         self.sbuffer.clear();
         if bitnuc::encode(sequence, &mut self.sbuffer).is_err() {
-            return Ok(false);
+            self.sbuffer.clear(); // clear the buffer to avoid writing invalid data
+            if self
+                .policy
+                .handle(sequence, &mut self.s_ibuf, &mut self.rng)?
+            {
+                bitnuc::encode(&self.s_ibuf, &mut self.sbuffer)?;
+            } else {
+                return Ok(false);
+            }
         }
 
         // Check if the current block can handle the next record
@@ -124,13 +165,26 @@ impl<W: Write> VBinseqWriter<W> {
 
         // encode the sequence
         self.sbuffer.clear();
-        if bitnuc::encode(primary, &mut self.sbuffer).is_err() {
-            return Ok(false);
-        }
-
         self.xbuffer.clear();
-        if bitnuc::encode(extended, &mut self.xbuffer).is_err() {
-            return Ok(false);
+
+        if bitnuc::encode(primary, &mut self.sbuffer).is_err()
+            || bitnuc::encode(extended, &mut self.xbuffer).is_err()
+        {
+            self.sbuffer.clear();
+            self.xbuffer.clear();
+
+            if self
+                .policy
+                .handle(primary, &mut self.s_ibuf, &mut self.rng)?
+                && self
+                    .policy
+                    .handle(extended, &mut self.x_ibuf, &mut self.rng)?
+            {
+                bitnuc::encode(&self.s_ibuf, &mut self.sbuffer)?;
+                bitnuc::encode(&self.x_ibuf, &mut self.xbuffer)?;
+            } else {
+                return Ok(false);
+            }
         }
 
         // Check if the current block can handle the next record
@@ -167,7 +221,15 @@ impl<W: Write> VBinseqWriter<W> {
         // encode the sequence
         self.sbuffer.clear();
         if bitnuc::encode(sequence, &mut self.sbuffer).is_err() {
-            return Ok(false);
+            self.sbuffer.clear(); // clear the buffer to avoid writing invalid data
+            if self
+                .policy
+                .handle(sequence, &mut self.s_ibuf, &mut self.rng)?
+            {
+                bitnuc::encode(&self.s_ibuf, &mut self.sbuffer)?;
+            } else {
+                return Ok(false);
+            }
         }
 
         // Check if the current block can handle the next record
@@ -205,12 +267,22 @@ impl<W: Write> VBinseqWriter<W> {
 
         // encode the sequence
         self.sbuffer.clear();
-        if bitnuc::encode(s_seq, &mut self.sbuffer).is_err() {
-            return Ok(false);
-        }
         self.xbuffer.clear();
-        if bitnuc::encode(x_seq, &mut self.xbuffer).is_err() {
-            return Ok(false);
+
+        if bitnuc::encode(s_seq, &mut self.sbuffer).is_err()
+            || bitnuc::encode(x_seq, &mut self.xbuffer).is_err()
+        {
+            self.sbuffer.clear();
+            self.xbuffer.clear();
+
+            if self.policy.handle(s_seq, &mut self.s_ibuf, &mut self.rng)?
+                && self.policy.handle(x_seq, &mut self.x_ibuf, &mut self.rng)?
+            {
+                bitnuc::encode(&self.s_ibuf, &mut self.sbuffer)?;
+                bitnuc::encode(&self.x_ibuf, &mut self.xbuffer)?;
+            } else {
+                return Ok(false);
+            }
         }
 
         // Check if the current block can handle the next record
