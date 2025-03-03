@@ -17,6 +17,9 @@ pub enum Error {
     #[error("Error with IO: {0}")]
     IoError(#[from] std::io::Error),
 
+    #[error("Error with UTF8: {0}")]
+    Utf8Error(#[from] std::str::Utf8Error),
+
     #[error("Bitnuc error: {0}")]
     BitnucError(#[from] bitnuc::NucleotideError),
 }
@@ -41,6 +44,8 @@ pub enum WriteError {
     PairedFlagNotSet,
     #[error("Encountered a record with embedded size {0} but the maximum block size is {1}. Rerun with increased block size.")]
     RecordSizeExceedsMaximumBlockSize(usize, usize),
+    #[error("Invalid nucleotides found in sequence: {0}")]
+    InvalidNucleotideSequence(String),
 }
 
 #[derive(thiserror::Error, Debug)]
