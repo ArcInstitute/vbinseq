@@ -9,9 +9,8 @@ use zstd::Decoder;
 use crate::{
     error::ReadError,
     header::{SIZE_BLOCK_HEADER, SIZE_HEADER},
-    BlockHeader, Result, VBinseqHeader,
+    BlockHeader, BlockIndex, BlockRange, ParallelProcessor, Result, VBinseqHeader,
 };
-use crate::{BlockIndex, BlockRange, ParallelProcessor};
 
 fn encoded_sequence_len(len: u64) -> usize {
     len.div_ceil(32) as usize
@@ -407,6 +406,27 @@ impl MmapReader {
 
         Ok(true)
     }
+
+    pub fn load_index(&self) -> Result<BlockIndex> {
+        if self.index_path().exists() {
+            match BlockIndex::from_path(self.index_path()) {
+                Ok(index) => Ok(index),
+                Err(e) => {
+                    if e.is_index_mismatch() {
+                        let index = BlockIndex::from_vbq(&self.path)?;
+                        index.save_to_path(self.index_path())?;
+                        Ok(index)
+                    } else {
+                        Err(e)
+                    }
+                }
+            }
+        } else {
+            let index = BlockIndex::from_vbq(&self.path)?;
+            index.save_to_path(self.index_path())?;
+            Ok(index)
+        }
+    }
 }
 
 impl MmapReader {
@@ -420,13 +440,7 @@ impl MmapReader {
         num_threads: usize,
     ) -> Result<()> {
         // Generate or load the index first
-        let index = if self.index_path().exists() {
-            BlockIndex::from_path(self.index_path())?
-        } else {
-            let idx = BlockIndex::from_vbq(&self.path)?;
-            idx.save_to_path(self.index_path())?;
-            idx
-        };
+        let index = self.load_index()?;
 
         // Get the number of blocks
         let n_blocks = index.n_blocks();
