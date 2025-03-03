@@ -11,11 +11,22 @@ pub enum Error {
     #[error("Error reading file: {0}")]
     ReadError(#[from] ReadError),
 
+    #[error("Error processing Index: {0}")]
+    IndexError(#[from] IndexError),
+
     #[error("Error with IO: {0}")]
     IoError(#[from] std::io::Error),
 
     #[error("Bitnuc error: {0}")]
     BitnucError(#[from] bitnuc::NucleotideError),
+}
+impl Error {
+    pub fn is_index_mismatch(&self) -> bool {
+        match self {
+            Self::IndexError(err) => err.is_mismatch(),
+            _ => false,
+        }
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -42,6 +53,21 @@ pub enum HeaderError {
 
     #[error("Invalid reserved bytes")]
     InvalidReservedBytes,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum IndexError {
+    #[error("Invalid magic number: {0}")]
+    InvalidMagicNumber(u64),
+    #[error("Index missing upstream file path: {0}")]
+    MissingUpstreamFile(String),
+    #[error("Mismatch in size between upstream size: {0} and expected index size {1}")]
+    ByteSizeMismatch(u64, u64),
+}
+impl IndexError {
+    pub fn is_mismatch(&self) -> bool {
+        matches!(self, Self::ByteSizeMismatch(_, _) | _)
+    }
 }
 
 #[derive(thiserror::Error, Debug)]

@@ -16,6 +16,7 @@ pub struct Decoder {
     buffer: Vec<u8>,
     dbuf: Vec<u8>,
     local_records: usize,
+    quality: Vec<u8>,
 
     /// Global values
     global_buffer: Arc<Mutex<Box<dyn Write + Send>>>,
@@ -29,6 +30,7 @@ impl Decoder {
             buffer: Vec::new(),
             dbuf: Vec::new(),
             local_records: 0,
+            quality: Vec::new(),
             global_buffer,
             num_records: Arc::new(Mutex::new(0)),
         }
@@ -46,8 +48,18 @@ impl ParallelProcessor for Decoder {
         // decode sequence
         record.decode_s(&mut self.dbuf)?;
 
+        // resize internal quality if necessary
+        let qual_buf = if record.squal().is_empty() {
+            if self.quality.len() < record.slen() as usize {
+                self.quality.resize(record.slen() as usize, b'?');
+            }
+            &self.quality[0..record.slen() as usize]
+        } else {
+            record.squal()
+        };
+
         // write fastq to local buffer
-        write_fastq(&mut self.buffer, &self.dbuf, record.squal())?;
+        write_fastq(&mut self.buffer, &self.dbuf, qual_buf)?;
 
         self.local_records += 1;
 

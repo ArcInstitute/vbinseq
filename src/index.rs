@@ -8,12 +8,17 @@ use byteorder::{ByteOrder, LittleEndian};
 use zstd::{Decoder, Encoder};
 
 use crate::{
+    error::IndexError,
     header::{SIZE_BLOCK_HEADER, SIZE_HEADER},
     BlockHeader, Result, VBinseqHeader,
 };
 
 /// Size of BlockRange in bytes
 pub const SIZE_BLOCK_RANGE: usize = 16;
+/// Size of IndexHeader in bytes
+pub const INDEX_HEADER_SIZE: usize = 32;
+/// Magic number to designate index (VBQINDEX)
+pub const INDEX_MAGIC: u64 = 0x5845444e49514256;
 
 /// Descriptor of the dimensions of a Block
 #[derive(Debug, Clone, Copy)]
@@ -53,27 +58,81 @@ impl BlockRange {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct IndexHeader {
+    /// Magic number to designate the index
+    ///
+    /// (8 bytes)
+    magic: u64,
+    /// Number of bytes in the file (quickcheck that file/index are matched)
+    ///
+    /// (8 bytes)
+    bytes: u64,
+    /// Reserved bytes
+    reserved: [u8; INDEX_HEADER_SIZE - 16],
+}
+impl IndexHeader {
+    pub fn new(bytes: u64) -> Self {
+        Self {
+            magic: INDEX_MAGIC,
+            bytes,
+            reserved: [42; INDEX_HEADER_SIZE - 16],
+        }
+    }
+    pub fn from_reader<R: Read>(reader: &mut R) -> Result<Self> {
+        let mut buffer = [0; INDEX_HEADER_SIZE];
+        reader.read_exact(&mut buffer)?;
+        let magic = LittleEndian::read_u64(&buffer[0..8]);
+        let bytes = LittleEndian::read_u64(&buffer[8..16]);
+        let _reserved = &buffer[16..INDEX_HEADER_SIZE]; // Not used but bytes pulled to validate size
+        if magic != INDEX_MAGIC {
+            return Err(IndexError::InvalidMagicNumber(magic).into());
+        }
+        Ok(Self {
+            magic,
+            bytes,
+            reserved: [42; INDEX_HEADER_SIZE - 16],
+        })
+    }
+    pub fn write_bytes<W: Write>(&self, writer: &mut W) -> Result<()> {
+        let mut buffer = [0; INDEX_HEADER_SIZE];
+        LittleEndian::write_u64(&mut buffer[0..8], self.magic);
+        LittleEndian::write_u64(&mut buffer[8..16], self.bytes);
+        buffer[16..].copy_from_slice(&self.reserved);
+        writer.write_all(&buffer)?;
+        Ok(())
+    }
+}
+
 /// Collection of block ranges forming an index
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct BlockIndex {
+    header: IndexHeader,
     ranges: Vec<BlockRange>,
 }
 impl BlockIndex {
+    pub fn new(header: IndexHeader) -> Self {
+        Self {
+            header,
+            ranges: Vec::default(),
+        }
+    }
     pub fn n_blocks(&self) -> usize {
         self.ranges.len()
     }
 
     /// Writes the collection of BlockRange to a file
     pub fn save_to_path<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let writer = File::create(path).map(BufWriter::new)?;
+        let mut writer = File::create(path).map(BufWriter::new)?;
+        self.header.write_bytes(&mut writer)?;
         let mut writer = Encoder::new(writer, 3)?.auto_finish();
-        self.write(&mut writer)?;
+        self.write_range(&mut writer)?;
         writer.flush()?;
         Ok(())
     }
 
     /// Write the collection of BlockRange to an output handle
-    pub fn write<W: Write>(&self, writer: &mut W) -> Result<()> {
+    pub fn write_range<W: Write>(&self, writer: &mut W) -> Result<()> {
         self.ranges
             .iter()
             .try_for_each(|range| -> Result<()> { range.write_bytes(writer) })
@@ -87,6 +146,7 @@ impl BlockIndex {
     pub fn from_vbq<P: AsRef<Path>>(path: P) -> Result<Self> {
         let file = File::open(path)?;
         let mmap = unsafe { memmap2::Mmap::map(&file)? };
+        let file_size = mmap.len();
 
         // Read header from mapped memory (unused but checks for validity)
         let _header = {
@@ -99,7 +159,8 @@ impl BlockIndex {
         let mut pos = SIZE_HEADER;
 
         // Initialize the collection
-        let mut index = BlockIndex::default();
+        let index_header = IndexHeader::new(file_size as u64);
+        let mut index = BlockIndex::new(index_header);
 
         // Find all block headers
         while pos < mmap.len() {
@@ -117,14 +178,32 @@ impl BlockIndex {
 
     /// Reads an index from a path
     pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let upstream_file =
+            if let Some(upstream) = path.as_ref().to_str().unwrap().strip_suffix(".vqi") {
+                upstream
+            } else {
+                return Err(IndexError::MissingUpstreamFile(
+                    path.as_ref().to_string_lossy().to_string(),
+                )
+                .into());
+            };
+        let upstream_handle = File::open(upstream_file)?;
+        let mmap = unsafe { memmap2::Mmap::map(&upstream_handle)? };
+        let file_size = mmap.len() as u64;
+
+        let mut file_handle = File::open(path).map(BufReader::new)?;
+        let index_header = IndexHeader::from_reader(&mut file_handle)?;
+        if index_header.bytes != file_size {
+            return Err(IndexError::ByteSizeMismatch(file_size, index_header.bytes).into());
+        }
         let buffer = {
             let mut buffer = Vec::new();
-            let mut handle = File::open(path).map(BufReader::new).map(Decoder::new)??;
-            handle.read_to_end(&mut buffer)?;
+            let mut decoder = Decoder::new(file_handle)?;
+            decoder.read_to_end(&mut buffer)?;
             buffer
         };
 
-        let mut ranges = Self::default();
+        let mut ranges = Self::new(index_header);
         let mut pos = 0;
         while pos < buffer.len() {
             let bound = pos + SIZE_BLOCK_RANGE;
