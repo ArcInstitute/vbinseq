@@ -20,6 +20,7 @@ num_cpus = "1.16.0"
 paraseq = "0.1.2"
 parking_lot = "0.12.3"
 rand = "0.8"
+tempfile = "3.17.1"
 
 [profile.release]
 debug = true
