@@ -137,10 +137,8 @@ impl<W: Write> VBinseqWriter<W> {
             }
 
             // Write the flag, length, and sequence to the block
-            self.cblock.write_flag(flag)?;
-            self.cblock.write_length(sequence.len() as u64)?;
-            self.cblock.write_length(0)?;
-            self.cblock.write_buffer(sbuffer)?;
+            self.cblock
+                .write_record(flag, sequence.len() as u64, 0, sbuffer, None, None, None)?;
 
             // Return true if the sequence was successfully written
             Ok(true)
@@ -172,11 +170,15 @@ impl<W: Write> VBinseqWriter<W> {
             }
 
             // Write the flag, length, and sequence to the block
-            self.cblock.write_flag(flag)?;
-            self.cblock.write_length(primary.len() as u64)?;
-            self.cblock.write_length(extended.len() as u64)?;
-            self.cblock.write_buffer(sbuffer)?;
-            self.cblock.write_buffer(xbuffer)?;
+            self.cblock.write_record(
+                flag,
+                primary.len() as u64,
+                extended.len() as u64,
+                sbuffer,
+                None,
+                Some(xbuffer),
+                None,
+            )?;
 
             // Return true if the record was successfully written
             Ok(true)
@@ -209,11 +211,15 @@ impl<W: Write> VBinseqWriter<W> {
             }
 
             // Write the flag, length, sequence, and quality scores to the block
-            self.cblock.write_flag(flag)?;
-            self.cblock.write_length(sequence.len() as u64)?;
-            self.cblock.write_length(0)?;
-            self.cblock.write_buffer(sbuffer)?;
-            self.cblock.write_quality(quality)?;
+            self.cblock.write_record(
+                flag,
+                sequence.len() as u64,
+                0,
+                sbuffer,
+                Some(quality),
+                None,
+                None,
+            )?;
 
             // Return true if the record was written successfully
             Ok(true)
@@ -249,13 +255,15 @@ impl<W: Write> VBinseqWriter<W> {
             }
 
             // Write the flag, length, sequence, and quality scores to the block
-            self.cblock.write_flag(flag)?;
-            self.cblock.write_length(s_seq.len() as u64)?;
-            self.cblock.write_length(x_seq.len() as u64)?;
-            self.cblock.write_buffer(sbuffer)?;
-            self.cblock.write_quality(s_qual)?;
-            self.cblock.write_buffer(xbuffer)?;
-            self.cblock.write_quality(x_qual)?;
+            self.cblock.write_record(
+                flag,
+                s_seq.len() as u64,
+                x_seq.len() as u64,
+                sbuffer,
+                Some(s_qual),
+                Some(xbuffer),
+                Some(x_qual),
+            )?;
 
             // Return true if the record was successfully written
             Ok(true)
@@ -283,6 +291,8 @@ impl<W: Write> Drop for VBinseqWriter<W> {
 struct BlockWriter {
     /// Current position in the block
     pos: usize,
+    /// Tracks all record start positions in the block
+    starts: Vec<usize>,
     /// Virtual block size
     block_size: usize,
     /// Compression level
@@ -301,6 +311,7 @@ impl BlockWriter {
     fn new(block_size: usize, compress: bool) -> Self {
         Self {
             pos: 0,
+            starts: Vec::default(),
             block_size,
             level: 3,
             ubuf: Vec::with_capacity(block_size),
@@ -319,6 +330,44 @@ impl BlockWriter {
             .into());
         }
         Ok(self.pos + record_size > self.block_size)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_record(
+        &mut self,
+        flag: u64,
+        slen: u64,
+        xlen: u64,
+        sbuf: &[u64],
+        squal: Option<&[u8]>,
+        xbuf: Option<&[u64]>,
+        xqual: Option<&[u8]>,
+    ) -> Result<()> {
+        // Tracks the record start position
+        self.starts.push(self.pos);
+
+        // Write the flag
+        self.write_flag(flag)?;
+
+        // Write the lengths
+        self.write_length(slen)?;
+        self.write_length(xlen)?;
+
+        // Write the primary sequence and optional quality
+        self.write_buffer(sbuf)?;
+        if let Some(qual) = squal {
+            self.write_quality(qual)?;
+        }
+
+        // Write the optional extended sequence and optional quality
+        if let Some(xbuf) = xbuf {
+            self.write_buffer(xbuf)?;
+        }
+        if let Some(qual) = xqual {
+            self.write_quality(qual)?;
+        }
+
+        Ok(())
     }
 
     fn write_flag(&mut self, flag: u64) -> Result<()> {
