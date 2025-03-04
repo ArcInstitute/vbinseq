@@ -1,13 +1,13 @@
 [package]
 name = "vbinseq"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 
 [dependencies]
 bitnuc = "0.2.10"
 byteorder = "1.5.0"
 memmap2 = "0.9.5"
-rand = "0.8"
+rand = { version = "0.8", features = ["small_rng"] }
 thiserror = "2.0.11"
 zstd = { version = "0.13.3", features = ["zstdmt"] }
 
