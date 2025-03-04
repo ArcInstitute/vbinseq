@@ -664,3 +664,171 @@ impl Encoder {
         self.x_ibuf.clear();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::*;
+
+    #[test]
+    fn test_ingest_empty_writer() -> crate::Result<()> {
+        // Test ingesting from an empty writer
+        let header = VBinseqHeader::new(false, false, false);
+
+        // Create a source writer that's empty
+        let mut source = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Create a destination writer
+        let mut dest = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Ingest from source to dest
+        dest.ingest(&mut source)?;
+
+        // Both writers should be empty
+        let source_vec = source.by_ref();
+        let dest_vec = dest.by_ref();
+
+        assert_eq!(source_vec.len(), 0);
+        assert_eq!(dest_vec.len(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ingest_single_record() -> crate::Result<()> {
+        // Test ingesting a single record
+        let header = VBinseqHeader::new(false, false, false);
+
+        // Create a source writer with a single record
+        let mut source = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Write a single sequence
+        let seq = b"ACGTACGTACGT";
+        source.write_nucleotides(1, seq)?;
+
+        // Create a destination writer
+        let mut dest = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Ingest from source to dest
+        dest.ingest(&mut source)?;
+
+        // Source should be empty, dest should have content
+        let source_vec = source.by_ref();
+        assert_eq!(source_vec.len(), 0);
+
+        // Source ubuffer should be empty as well
+        let source_ubuf = &source.cblock.ubuf;
+        assert!(source_ubuf.is_empty());
+
+        // The destination vec will be empty because we haven't hit a buffer limit
+        let dest_vec = dest.by_ref();
+        assert!(dest_vec.is_empty());
+
+        // The destination ubuffer should have some data however
+        let dest_ubuf = &dest.cblock.ubuf;
+        assert!(!dest_ubuf.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ingest_multi_record() -> crate::Result<()> {
+        // Test ingesting a single record
+        let header = VBinseqHeader::new(false, false, false);
+
+        // Create a source writer with a single record
+        let mut source = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Write multiple sequences
+        for _ in 0..30 {
+            let seq = b"ACGTACGTACGT";
+            source.write_nucleotides(1, seq)?;
+        }
+
+        // Create a destination writer
+        let mut dest = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Ingest from source to dest
+        dest.ingest(&mut source)?;
+
+        // Source should be empty, dest should have content
+        let source_vec = source.by_ref();
+        assert_eq!(source_vec.len(), 0);
+
+        // Source ubuffer should be empty as well
+        let source_ubuf = &source.cblock.ubuf;
+        assert!(source_ubuf.is_empty());
+
+        // The destination vec will be empty because we haven't hit a buffer limit
+        let dest_vec = dest.by_ref();
+        assert!(dest_vec.is_empty());
+
+        // The destination ubuffer should have some data however
+        let dest_ubuf = &dest.cblock.ubuf;
+        assert!(!dest_ubuf.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ingest_block_boundary() -> crate::Result<()> {
+        // Test ingesting a single record
+        let header = VBinseqHeader::new(false, false, false);
+
+        // Create a source writer with a single record
+        let mut source = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Write multiple sequences (will cross boundary)
+        for _ in 0..30000 {
+            let seq = b"ACGTACGTACGT";
+            source.write_nucleotides(1, seq)?;
+        }
+
+        // Create a destination writer
+        let mut dest = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Ingest from source to dest
+        dest.ingest(&mut source)?;
+
+        // Source should be empty, dest should have content
+        let source_vec = source.by_ref();
+        assert_eq!(source_vec.len(), 0);
+
+        // Source ubuffer should be empty as well
+        let source_ubuf = &source.cblock.ubuf;
+        assert!(source_ubuf.is_empty());
+
+        // The destination vec will be empty because we haven't hit a buffer limit
+        let dest_vec = dest.by_ref();
+        assert!(!dest_vec.is_empty());
+
+        // The destination ubuffer should have some data however
+        let dest_ubuf = &dest.cblock.ubuf;
+        assert!(!dest_ubuf.is_empty());
+
+        Ok(())
+    }
+}
