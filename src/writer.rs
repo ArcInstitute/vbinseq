@@ -60,12 +60,9 @@ impl VBinseqWriterBuilder {
     }
 
     pub fn build<W: Write>(self, inner: W) -> Result<VBinseqWriter<W>> {
-        let Some(header) = self.header else {
-            return Err(WriteError::MissingHeader.into());
-        };
         VBinseqWriter::new(
             inner,
-            header,
+            self.header.unwrap_or_default(),
             self.policy.unwrap_or_default(),
             self.headless.unwrap_or(false),
         )
@@ -676,7 +673,22 @@ impl Encoder {
 
 #[cfg(test)]
 mod tests {
-    use crate::*;
+    use crate::{header::SIZE_HEADER, *};
+
+    #[test]
+    fn test_headless_writer() -> crate::Result<()> {
+        let writer = VBinseqWriterBuilder::default()
+            .headless(true)
+            .build(Vec::new())?;
+        assert_eq!(writer.inner.len(), 0);
+
+        let writer = VBinseqWriterBuilder::default()
+            .headless(false)
+            .build(Vec::new())?;
+        assert_eq!(writer.inner.len(), SIZE_HEADER);
+
+        Ok(())
+    }
 
     #[test]
     fn test_ingest_empty_writer() -> crate::Result<()> {
