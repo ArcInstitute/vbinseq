@@ -12,4 +12,4 @@ pub use index::{BlockIndex, BlockRange};
 pub use parallel::ParallelProcessor;
 pub use policy::Policy;
 pub use reader::{MmapReader, RefRecord};
-pub use writer::VBinseqWriter;
+pub use writer::{VBinseqWriter, VBinseqWriterBuilder};

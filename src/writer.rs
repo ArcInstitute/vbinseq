@@ -33,6 +33,42 @@ pub fn record_byte_size_quality(schunk: usize, xchunk: usize, slen: usize, xlen:
     record_byte_size(schunk, xchunk) + slen + xlen
 }
 
+/// A builder for the VBinseqWriter
+#[derive(Default)]
+pub struct VBinseqWriterBuilder {
+    /// Header of the file
+    header: Option<VBinseqHeader>,
+    /// Optional policy for encoding
+    policy: Option<Policy>,
+    /// Optional headless mode (used in parallel writing)
+    headless: Option<bool>,
+}
+impl VBinseqWriterBuilder {
+    pub fn header(mut self, header: VBinseqHeader) -> Self {
+        self.header = Some(header);
+        self
+    }
+
+    pub fn policy(mut self, policy: Policy) -> Self {
+        self.policy = Some(policy);
+        self
+    }
+
+    pub fn headless(mut self, headless: bool) -> Self {
+        self.headless = Some(headless);
+        self
+    }
+
+    pub fn build<W: Write>(self, inner: W) -> Result<VBinseqWriter<W>> {
+        VBinseqWriter::new(
+            inner,
+            self.header.unwrap_or_default(),
+            self.policy.unwrap_or_default(),
+            self.headless.unwrap_or(false),
+        )
+    }
+}
+
 /// A writer for the VBinseq format.
 ///
 /// The main intuition of VBinseq to initially write a header that describes the
@@ -62,25 +98,16 @@ pub struct VBinseqWriter<W: Write> {
     cblock: BlockWriter,
 }
 impl<W: Write> VBinseqWriter<W> {
-    pub fn new(inner: W, header: VBinseqHeader) -> Result<Self> {
-        let mut wtr = Self {
-            inner,
-            header,
-            encoder: Encoder::new(),
-            cblock: BlockWriter::new(header.block as usize, header.compressed),
-        };
-        wtr.init()?;
-        Ok(wtr)
-    }
-
-    pub fn with_policy(inner: W, header: VBinseqHeader, policy: Policy) -> Result<Self> {
+    pub fn new(inner: W, header: VBinseqHeader, policy: Policy, headless: bool) -> Result<Self> {
         let mut wtr = Self {
             inner,
             header,
             encoder: Encoder::with_policy(policy),
             cblock: BlockWriter::new(header.block as usize, header.compressed),
         };
-        wtr.init()?;
+        if !headless {
+            wtr.init()?;
+        }
         Ok(wtr)
     }
 
@@ -107,10 +134,8 @@ impl<W: Write> VBinseqWriter<W> {
             }
 
             // Write the flag, length, and sequence to the block
-            self.cblock.write_flag(flag)?;
-            self.cblock.write_length(sequence.len() as u64)?;
-            self.cblock.write_length(0)?;
-            self.cblock.write_buffer(sbuffer)?;
+            self.cblock
+                .write_record(flag, sequence.len() as u64, 0, sbuffer, None, None, None)?;
 
             // Return true if the sequence was successfully written
             Ok(true)
@@ -142,11 +167,15 @@ impl<W: Write> VBinseqWriter<W> {
             }
 
             // Write the flag, length, and sequence to the block
-            self.cblock.write_flag(flag)?;
-            self.cblock.write_length(primary.len() as u64)?;
-            self.cblock.write_length(extended.len() as u64)?;
-            self.cblock.write_buffer(sbuffer)?;
-            self.cblock.write_buffer(xbuffer)?;
+            self.cblock.write_record(
+                flag,
+                primary.len() as u64,
+                extended.len() as u64,
+                sbuffer,
+                None,
+                Some(xbuffer),
+                None,
+            )?;
 
             // Return true if the record was successfully written
             Ok(true)
@@ -179,11 +208,15 @@ impl<W: Write> VBinseqWriter<W> {
             }
 
             // Write the flag, length, sequence, and quality scores to the block
-            self.cblock.write_flag(flag)?;
-            self.cblock.write_length(sequence.len() as u64)?;
-            self.cblock.write_length(0)?;
-            self.cblock.write_buffer(sbuffer)?;
-            self.cblock.write_quality(quality)?;
+            self.cblock.write_record(
+                flag,
+                sequence.len() as u64,
+                0,
+                sbuffer,
+                Some(quality),
+                None,
+                None,
+            )?;
 
             // Return true if the record was written successfully
             Ok(true)
@@ -219,13 +252,15 @@ impl<W: Write> VBinseqWriter<W> {
             }
 
             // Write the flag, length, sequence, and quality scores to the block
-            self.cblock.write_flag(flag)?;
-            self.cblock.write_length(s_seq.len() as u64)?;
-            self.cblock.write_length(x_seq.len() as u64)?;
-            self.cblock.write_buffer(sbuffer)?;
-            self.cblock.write_quality(s_qual)?;
-            self.cblock.write_buffer(xbuffer)?;
-            self.cblock.write_quality(x_qual)?;
+            self.cblock.write_record(
+                flag,
+                s_seq.len() as u64,
+                x_seq.len() as u64,
+                sbuffer,
+                Some(s_qual),
+                Some(xbuffer),
+                Some(x_qual),
+            )?;
 
             // Return true if the record was successfully written
             Ok(true)
@@ -241,6 +276,38 @@ impl<W: Write> VBinseqWriter<W> {
         self.inner.flush()?;
         Ok(())
     }
+
+    /// Provides a mutable reference to the inner writer
+    fn by_ref(&mut self) -> &mut W {
+        self.inner.by_ref()
+    }
+
+    /// Provides a mutable reference to the BlockWriter
+    fn cblock_mut(&mut self) -> &mut BlockWriter {
+        &mut self.cblock
+    }
+
+    /// Ingests the internal bytes of a VBinseqWriter whose inner writer is a Vec of bytes.
+    ///
+    /// Removes the bytes from the other writer after ingestion.
+    pub fn ingest(&mut self, other: &mut VBinseqWriter<Vec<u8>>) -> Result<()> {
+        if self.header != other.header {
+            return Err(WriteError::IncompatibleHeaders(self.header, other.header).into());
+        }
+
+        // Write complete blocks from other directly
+        // and clear the other (mimics reading)
+        {
+            self.inner.write_all(other.by_ref())?;
+            other.by_ref().clear();
+        }
+
+        // Ingest incomplete block from other
+        {
+            self.cblock.ingest(other.cblock_mut(), &mut self.inner)?;
+        }
+        Ok(())
+    }
 }
 
 impl<W: Write> Drop for VBinseqWriter<W> {
@@ -253,6 +320,8 @@ impl<W: Write> Drop for VBinseqWriter<W> {
 struct BlockWriter {
     /// Current position in the block
     pos: usize,
+    /// Tracks all record start positions in the block
+    starts: Vec<usize>,
     /// Virtual block size
     block_size: usize,
     /// Compression level
@@ -271,6 +340,7 @@ impl BlockWriter {
     fn new(block_size: usize, compress: bool) -> Self {
         Self {
             pos: 0,
+            starts: Vec::default(),
             block_size,
             level: 3,
             ubuf: Vec::with_capacity(block_size),
@@ -289,6 +359,44 @@ impl BlockWriter {
             .into());
         }
         Ok(self.pos + record_size > self.block_size)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_record(
+        &mut self,
+        flag: u64,
+        slen: u64,
+        xlen: u64,
+        sbuf: &[u64],
+        squal: Option<&[u8]>,
+        xbuf: Option<&[u64]>,
+        xqual: Option<&[u8]>,
+    ) -> Result<()> {
+        // Tracks the record start position
+        self.starts.push(self.pos);
+
+        // Write the flag
+        self.write_flag(flag)?;
+
+        // Write the lengths
+        self.write_length(slen)?;
+        self.write_length(xlen)?;
+
+        // Write the primary sequence and optional quality
+        self.write_buffer(sbuf)?;
+        if let Some(qual) = squal {
+            self.write_quality(qual)?;
+        }
+
+        // Write the optional extended sequence and optional quality
+        if let Some(xbuf) = xbuf {
+            self.write_buffer(xbuf)?;
+        }
+        if let Some(qual) = xqual {
+            self.write_quality(qual)?;
+        }
+
+        Ok(())
     }
 
     fn write_flag(&mut self, flag: u64) -> Result<()> {
@@ -368,8 +476,100 @@ impl BlockWriter {
 
     fn clear(&mut self) {
         self.pos = 0;
+        self.starts.clear();
         self.ubuf.clear();
         self.zbuf.clear();
+    }
+
+    /// Ingests *all* bytes from another BlockWriter.
+    ///
+    /// Because both block sizes should be equivalent the process should take
+    /// at most two steps.
+    ///
+    /// I.e. the bytes can either all fit directly into self.ubuf or an intermediate
+    /// flush step is required.
+    fn ingest<W: Write>(&mut self, other: &mut Self, inner: &mut W) -> Result<()> {
+        if self.block_size != other.block_size {
+            return Err(
+                WriteError::IncompatibleBlockSizes(self.block_size, other.block_size).into(),
+            );
+        }
+        // Number of available bytes in buffer (self)
+        let remaining = self.block_size - self.pos;
+
+        // Quick ingestion (take all without flush)
+        if other.pos <= remaining {
+            self.ingest_all(other)
+        } else {
+            self.ingest_subset(other)?;
+            self.flush(inner)?;
+            self.ingest_all(other)
+        }
+    }
+
+    /// Takes all bytes from the other into self
+    ///
+    /// Do not call this directly - always go through `ingest`
+    fn ingest_all(&mut self, other: &mut Self) -> Result<()> {
+        let n_bytes = other.pos;
+
+        // Drain bounded bytes from other (clearing them in the process)
+        self.ubuf.write_all(other.ubuf.drain(..).as_slice())?;
+
+        // Take starts from other (shifting them in the process)
+        other
+            .starts
+            .drain(..)
+            .for_each(|start| self.starts.push(start + self.pos));
+
+        // Left shift all remaining starts in other
+        other.starts.iter_mut().for_each(|x| {
+            *x -= n_bytes;
+        });
+
+        // Shift position cursors
+        self.pos += n_bytes;
+
+        // Clear the other for good measure
+        other.clear();
+
+        Ok(())
+    }
+
+    /// Takes as many bytes as possible from the other into self
+    ///
+    /// Do not call this directly - always go through `ingest
+    fn ingest_subset(&mut self, other: &mut Self) -> Result<()> {
+        let remaining = self.block_size - self.pos;
+        let (start_index, end_byte) = other
+            .starts
+            .iter()
+            .enumerate()
+            .take_while(|(_idx, x)| **x <= remaining)
+            .last()
+            .map(|(idx, x)| (idx, *x))
+            .unwrap();
+
+        // Drain bounded bytes from other (clearing them in the process)
+        self.ubuf
+            .write_all(other.ubuf.drain(0..end_byte).as_slice())?;
+
+        // Take starts from other (shifting them in the process)
+        other
+            .starts
+            .drain(0..start_index)
+            .for_each(|start| self.starts.push(start + self.pos));
+
+        // Left shift all remaining starts in other
+        other.starts.iter_mut().for_each(|x| {
+            *x -= end_byte;
+        });
+
+        // Shift position cursors
+        self.pos += end_byte;
+        other.pos -= end_byte;
+
+        Ok(())
     }
 }
 
@@ -468,5 +668,304 @@ impl Encoder {
         self.xbuffer.clear();
         self.s_ibuf.clear();
         self.x_ibuf.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{header::SIZE_HEADER, *};
+
+    #[test]
+    fn test_headless_writer() -> crate::Result<()> {
+        let writer = VBinseqWriterBuilder::default()
+            .headless(true)
+            .build(Vec::new())?;
+        assert_eq!(writer.inner.len(), 0);
+
+        let writer = VBinseqWriterBuilder::default()
+            .headless(false)
+            .build(Vec::new())?;
+        assert_eq!(writer.inner.len(), SIZE_HEADER);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ingest_empty_writer() -> crate::Result<()> {
+        // Test ingesting from an empty writer
+        let header = VBinseqHeader::new(false, false, false);
+
+        // Create a source writer that's empty
+        let mut source = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Create a destination writer
+        let mut dest = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Ingest from source to dest
+        dest.ingest(&mut source)?;
+
+        // Both writers should be empty
+        let source_vec = source.by_ref();
+        let dest_vec = dest.by_ref();
+
+        assert_eq!(source_vec.len(), 0);
+        assert_eq!(dest_vec.len(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ingest_single_record() -> crate::Result<()> {
+        // Test ingesting a single record
+        let header = VBinseqHeader::new(false, false, false);
+
+        // Create a source writer with a single record
+        let mut source = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Write a single sequence
+        let seq = b"ACGTACGTACGT";
+        source.write_nucleotides(1, seq)?;
+
+        // We have not crossed a boundary
+        assert!(source.by_ref().is_empty());
+
+        // Create a destination writer
+        let mut dest = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Ingest from source to dest
+        dest.ingest(&mut source)?;
+
+        // Source should be empty, dest should have content
+        let source_vec = source.by_ref();
+        assert_eq!(source_vec.len(), 0);
+
+        // Source ubuffer should be empty as well
+        let source_ubuf = &source.cblock.ubuf;
+        assert!(source_ubuf.is_empty());
+
+        // The destination vec will be empty because we haven't hit a buffer limit
+        let dest_vec = dest.by_ref();
+        assert!(dest_vec.is_empty());
+
+        // The destination ubuffer should have some data however
+        let dest_ubuf = &dest.cblock.ubuf;
+        assert!(!dest_ubuf.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ingest_multi_record() -> crate::Result<()> {
+        // Test ingesting a single record
+        let header = VBinseqHeader::new(false, false, false);
+
+        // Create a source writer with a single record
+        let mut source = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Write multiple sequences
+        for _ in 0..30 {
+            let seq = b"ACGTACGTACGT";
+            source.write_nucleotides(1, seq)?;
+        }
+        // We have not crossed a boundary
+        assert!(source.by_ref().is_empty());
+
+        // Create a destination writer
+        let mut dest = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Ingest from source to dest
+        dest.ingest(&mut source)?;
+
+        // Source should be empty, dest should have content
+        let source_vec = source.by_ref();
+        assert_eq!(source_vec.len(), 0);
+
+        // Source ubuffer should be empty as well
+        let source_ubuf = &source.cblock.ubuf;
+        assert!(source_ubuf.is_empty());
+
+        // The destination vec will be empty because we haven't hit a buffer limit
+        let dest_vec = dest.by_ref();
+        assert!(dest_vec.is_empty());
+
+        // The destination ubuffer should have some data however
+        let dest_ubuf = &dest.cblock.ubuf;
+        assert!(!dest_ubuf.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ingest_block_boundary() -> crate::Result<()> {
+        // Test ingesting a single record
+        let header = VBinseqHeader::new(false, false, false);
+
+        // Create a source writer with a single record
+        let mut source = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Write multiple sequences (will cross boundary)
+        for _ in 0..30000 {
+            let seq = b"ACGTACGTACGT";
+            source.write_nucleotides(1, seq)?;
+        }
+
+        // We have crossed a boundary
+        assert!(!source.by_ref().is_empty());
+
+        // Create a destination writer
+        let mut dest = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Ingest from source to dest
+        dest.ingest(&mut source)?;
+
+        // Source should be empty, dest should have content
+        let source_vec = source.by_ref();
+        assert_eq!(source_vec.len(), 0);
+
+        // Source ubuffer should be empty as well
+        let source_ubuf = &source.cblock.ubuf;
+        assert!(source_ubuf.is_empty());
+
+        // The destination vec will not be empty because we hit a buffer limit
+        let dest_vec = dest.by_ref();
+        assert!(!dest_vec.is_empty());
+
+        // The destination ubuffer should have some data however
+        let dest_ubuf = &dest.cblock.ubuf;
+        assert!(!dest_ubuf.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ingest_with_quality_scores() -> crate::Result<()> {
+        // Test ingesting records with quality scores
+        let source_header = VBinseqHeader::new(true, false, false); // with quality
+        let dest_header = VBinseqHeader::new(true, false, false); // with quality
+
+        // Create a source writer with quality scores
+        let mut source = VBinseqWriterBuilder::default()
+            .header(source_header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Write sequences with quality scores
+        for i in 0..5 {
+            let seq = b"ACGTACGTACGT";
+            // Simple quality scores (all the same for this test)
+            let qual = vec![40; seq.len()];
+            source.write_nucleotides_quality(i, seq, &qual)?;
+        }
+
+        // Create a destination writer
+        let mut dest = VBinseqWriterBuilder::default()
+            .header(dest_header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Ingest from source to dest
+        dest.ingest(&mut source)?;
+
+        // Verify source is cleared
+        let source_vec = source.by_ref();
+        assert_eq!(source_vec.len(), 0);
+
+        // Verify destination has content in ubuf
+        let dest_ubuf = &dest.cblock.ubuf;
+        assert!(!dest_ubuf.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ingest_with_compression() -> crate::Result<()> {
+        // Test ingesting a single record
+        let header = VBinseqHeader::new(false, true, false);
+
+        // Create a source writer with a single record
+        let mut source = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Write multiple sequences (will cross boundary)
+        for _ in 0..30000 {
+            let seq = b"ACGTACGTACGT";
+            source.write_nucleotides(1, seq)?;
+        }
+
+        // Create a destination writer
+        let mut dest = VBinseqWriterBuilder::default()
+            .header(header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Ingest from source to dest
+        dest.ingest(&mut source)?;
+
+        // Source should be empty, dest should have content
+        let source_vec = source.by_ref();
+        assert_eq!(source_vec.len(), 0);
+
+        // Source ubuffer should be empty as well
+        let source_ubuf = &source.cblock.ubuf;
+        assert!(source_ubuf.is_empty());
+
+        // The destination vec will not be empty because we hit a buffer limit
+        let dest_vec = dest.by_ref();
+        assert!(!dest_vec.is_empty());
+
+        // The destination ubuffer should have some data however
+        let dest_ubuf = &dest.cblock.ubuf;
+        assert!(!dest_ubuf.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ingest_incompatible_headers() -> crate::Result<()> {
+        let source_header = VBinseqHeader::new(false, false, false);
+        let dest_header = VBinseqHeader::new(true, false, false);
+
+        // Create a source writer with quality scores
+        let mut source = VBinseqWriterBuilder::default()
+            .header(source_header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Create a destination writer
+        let mut dest = VBinseqWriterBuilder::default()
+            .header(dest_header)
+            .headless(true)
+            .build(Vec::new())?;
+
+        // Ingest from source to dest (will error)
+        assert!(dest.ingest(&mut source).is_err());
+
+        Ok(())
     }
 }

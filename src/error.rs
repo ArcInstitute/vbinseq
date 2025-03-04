@@ -1,25 +1,21 @@
+use crate::VBinseqHeader;
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("Error processing header: {0}")]
     HeaderError(#[from] HeaderError),
-
     #[error("Error writing file: {0}")]
     WriteError(#[from] WriteError),
-
     #[error("Error reading file: {0}")]
     ReadError(#[from] ReadError),
-
     #[error("Error processing Index: {0}")]
     IndexError(#[from] IndexError),
-
     #[error("Error with IO: {0}")]
     IoError(#[from] std::io::Error),
-
     #[error("Error with UTF8: {0}")]
     Utf8Error(#[from] std::str::Utf8Error),
-
     #[error("Bitnuc error: {0}")]
     BitnucError(#[from] bitnuc::NucleotideError),
 }
@@ -46,16 +42,22 @@ pub enum WriteError {
     RecordSizeExceedsMaximumBlockSize(usize, usize),
     #[error("Invalid nucleotides found in sequence: {0}")]
     InvalidNucleotideSequence(String),
+    #[error("Missing header in writer builder")]
+    MissingHeader,
+    #[error(
+        "Incompatible block sizes encountered in BlockWriter Ingest. Found ({1}) Expected ({0})"
+    )]
+    IncompatibleBlockSizes(usize, usize),
+    #[error("Incompatible headers found in VBinseqWriter::ingest. Found ({1:?}) Expected ({0:?})")]
+    IncompatibleHeaders(VBinseqHeader, VBinseqHeader),
 }
 
 #[derive(thiserror::Error, Debug)]
 pub enum HeaderError {
     #[error("Invalid magic number: {0}")]
     InvalidMagicNumber(u32),
-
     #[error("Invalid format version: {0}")]
     InvalidFormatVersion(u8),
-
     #[error("Invalid reserved bytes")]
     InvalidReservedBytes,
 }
@@ -79,10 +81,8 @@ impl IndexError {
 pub enum ReadError {
     #[error("Unexpected file metadata")]
     InvalidFileType,
-
     #[error("Unexpected Block Magic Number found: {0} at position {1}")]
     InvalidBlockMagicNumber(u64, usize),
-
     #[error("Unable to find an expected full block at position {0}")]
     UnexpectedEndOfFile(usize),
 }

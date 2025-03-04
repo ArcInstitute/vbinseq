@@ -6,7 +6,7 @@ use std::{
 use anyhow::Result;
 use clap::Parser;
 use paraseq::fastq;
-use vbinseq::{MmapReader, VBinseqHeader, VBinseqWriter};
+use vbinseq::{MmapReader, VBinseqHeader, VBinseqWriterBuilder};
 
 #[derive(Parser)]
 struct Args {
@@ -42,7 +42,9 @@ fn write_set(
     );
     let handle = File::create(output_filepath).map(BufWriter::new)?;
     let header = VBinseqHeader::new(write_quality, compress, false);
-    let mut writer = VBinseqWriter::new(handle, header)?;
+    let mut writer = VBinseqWriterBuilder::default()
+        .header(header)
+        .build(handle)?;
 
     let mut rnum = 0;
     while rset.fill(&mut reader)? {
@@ -79,7 +81,9 @@ fn write_paired_set(
     );
     let handle = File::create(output_filepath).map(BufWriter::new)?;
     let header = VBinseqHeader::new(write_quality, compress, true);
-    let mut writer = VBinseqWriter::new(handle, header)?;
+    let mut writer = VBinseqWriterBuilder::default()
+        .header(header)
+        .build(handle)?;
 
     let mut rnum = 0;
     while rset.fill(&mut reader)? {
