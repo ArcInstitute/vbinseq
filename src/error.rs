@@ -1,3 +1,5 @@
+use crate::VBinseqHeader;
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(thiserror::Error, Debug)]
@@ -48,6 +50,12 @@ pub enum WriteError {
     InvalidNucleotideSequence(String),
     #[error("Missing header in writer builder")]
     MissingHeader,
+    #[error(
+        "Incompatible block sizes encountered in BlockWriter Ingest. Found ({1}) Expected ({0})"
+    )]
+    IncompatibleBlockSizes(usize, usize),
+    #[error("Incompatible headers found in VBinseqWriter::ingest. Found ({1:?}) Expected ({0:?})")]
+    IncompatibleHeaders(VBinseqHeader, VBinseqHeader),
 }
 
 #[derive(thiserror::Error, Debug)]

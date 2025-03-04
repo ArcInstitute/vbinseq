@@ -25,7 +25,7 @@ pub const BLOCK_SIZE: u64 = 128 * 1024;
 /// Reserved bytes for future use
 pub const RESERVED_BYTES: [u8; 16] = [42; 16];
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VBinseqHeader {
     /// Magic number to identify the file format
     ///
