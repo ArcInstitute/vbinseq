@@ -279,6 +279,34 @@ impl<W: Write> VBinseqWriter<W> {
         self.inner.flush()?;
         Ok(())
     }
+
+    /// Provides a mutable reference to the inner writer
+    fn by_ref(&mut self) -> &mut W {
+        self.inner.by_ref()
+    }
+
+    /// Provides a mutable reference to the BlockWriter
+    fn cblock_mut(&mut self) -> &mut BlockWriter {
+        &mut self.cblock
+    }
+
+    /// Ingests the internal bytes of a VBinseqWriter whose inner writer is a Vec of bytes.
+    ///
+    /// Removes the bytes from the other writer after ingestion.
+    pub fn ingest(&mut self, other: &mut VBinseqWriter<Vec<u8>>) -> Result<()> {
+        // Write complete blocks from other directly
+        // and clear the other (mimics reading)
+        {
+            self.inner.write_all(other.by_ref())?;
+            other.by_ref().clear();
+        }
+
+        // Ingest incomplete block from other
+        {
+            self.cblock.ingest(other.cblock_mut(), &mut self.inner)?;
+        }
+        Ok(())
+    }
 }
 
 impl<W: Write> Drop for VBinseqWriter<W> {
@@ -447,8 +475,95 @@ impl BlockWriter {
 
     fn clear(&mut self) {
         self.pos = 0;
+        self.starts.clear();
         self.ubuf.clear();
         self.zbuf.clear();
+    }
+
+    /// Ingests *all* bytes from another BlockWriter.
+    ///
+    /// Because both block sizes should be equivalent the process should take
+    /// at most two steps.
+    ///
+    /// I.e. the bytes can either all fit directly into self.ubuf or an intermediate
+    /// flush step is required.
+    fn ingest<W: Write>(&mut self, other: &mut Self, inner: &mut W) -> Result<()> {
+        // Number of available bytes in buffer (self)
+        let remaining = self.block_size - self.pos;
+
+        // Quick ingestion (take all without flush)
+        if other.pos <= remaining {
+            self.ingest_all(other)
+        } else {
+            self.ingest_subset(other)?;
+            self.flush(inner)?;
+            self.ingest_all(other)
+        }
+    }
+
+    /// Takes all bytes from the other into self
+    ///
+    /// Do not call this directly - always go through `ingest`
+    fn ingest_all(&mut self, other: &mut Self) -> Result<()> {
+        let n_bytes = other.pos;
+
+        // Drain bounded bytes from other (clearing them in the process)
+        self.ubuf.write_all(other.ubuf.drain(..).as_slice())?;
+
+        // Take starts from other (shifting them in the process)
+        other
+            .starts
+            .drain(..)
+            .for_each(|start| self.starts.push(start + self.pos));
+
+        // Left shift all remaining starts in other
+        other.starts.iter_mut().for_each(|x| {
+            *x -= n_bytes;
+        });
+
+        // Shift position cursors
+        self.pos += n_bytes;
+
+        // Clear the other for good measure
+        other.clear();
+
+        Ok(())
+    }
+
+    /// Takes as many bytes as possible from the other into self
+    ///
+    /// Do not call this directly - always go through `ingest
+    fn ingest_subset(&mut self, other: &mut Self) -> Result<()> {
+        let remaining = self.block_size - self.pos;
+        let (start_index, end_byte) = other
+            .starts
+            .iter()
+            .enumerate()
+            .take_while(|(_idx, x)| **x <= remaining)
+            .last()
+            .map(|(idx, x)| (idx, *x))
+            .unwrap();
+
+        // Drain bounded bytes from other (clearing them in the process)
+        self.ubuf
+            .write_all(other.ubuf.drain(0..end_byte).as_slice())?;
+
+        // Take starts from other (shifting them in the process)
+        other
+            .starts
+            .drain(0..start_index)
+            .for_each(|start| self.starts.push(start + self.pos));
+
+        // Left shift all remaining starts in other
+        other.starts.iter_mut().for_each(|x| {
+            *x -= end_byte;
+        });
+
+        // Shift position cursors
+        self.pos += end_byte;
+        other.pos -= end_byte;
+
+        Ok(())
     }
 }
 
