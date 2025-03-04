@@ -33,6 +33,45 @@ pub fn record_byte_size_quality(schunk: usize, xchunk: usize, slen: usize, xlen:
     record_byte_size(schunk, xchunk) + slen + xlen
 }
 
+/// A builder for the VBinseqWriter
+#[derive(Default)]
+pub struct VBinseqWriterBuilder {
+    /// Header of the file
+    header: Option<VBinseqHeader>,
+    /// Optional policy for encoding
+    policy: Option<Policy>,
+    /// Optional headless mode (used in parallel writing)
+    headless: Option<bool>,
+}
+impl VBinseqWriterBuilder {
+    pub fn header(mut self, header: VBinseqHeader) -> Self {
+        self.header = Some(header);
+        self
+    }
+
+    pub fn policy(mut self, policy: Policy) -> Self {
+        self.policy = Some(policy);
+        self
+    }
+
+    pub fn headless(mut self, headless: bool) -> Self {
+        self.headless = Some(headless);
+        self
+    }
+
+    pub fn build<W: Write>(self, inner: W) -> Result<VBinseqWriter<W>> {
+        let Some(header) = self.header else {
+            return Err(WriteError::MissingHeader.into());
+        };
+        VBinseqWriter::new(
+            inner,
+            header,
+            self.policy.unwrap_or_default(),
+            self.headless.unwrap_or(false),
+        )
+    }
+}
+
 /// A writer for the VBinseq format.
 ///
 /// The main intuition of VBinseq to initially write a header that describes the
@@ -62,25 +101,16 @@ pub struct VBinseqWriter<W: Write> {
     cblock: BlockWriter,
 }
 impl<W: Write> VBinseqWriter<W> {
-    pub fn new(inner: W, header: VBinseqHeader) -> Result<Self> {
-        let mut wtr = Self {
-            inner,
-            header,
-            encoder: Encoder::new(),
-            cblock: BlockWriter::new(header.block as usize, header.compressed),
-        };
-        wtr.init()?;
-        Ok(wtr)
-    }
-
-    pub fn with_policy(inner: W, header: VBinseqHeader, policy: Policy) -> Result<Self> {
+    pub fn new(inner: W, header: VBinseqHeader, policy: Policy, headless: bool) -> Result<Self> {
         let mut wtr = Self {
             inner,
             header,
             encoder: Encoder::with_policy(policy),
             cblock: BlockWriter::new(header.block as usize, header.compressed),
         };
-        wtr.init()?;
+        if !headless {
+            wtr.init()?;
+        }
         Ok(wtr)
     }
 

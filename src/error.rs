@@ -46,6 +46,8 @@ pub enum WriteError {
     RecordSizeExceedsMaximumBlockSize(usize, usize),
     #[error("Invalid nucleotides found in sequence: {0}")]
     InvalidNucleotideSequence(String),
+    #[error("Missing header in writer builder")]
+    MissingHeader,
 }
 
 #[derive(thiserror::Error, Debug)]
