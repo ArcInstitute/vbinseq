@@ -443,7 +443,7 @@ impl BlockWriter {
         encoder.finish()?;
 
         // Build a block header (this is variably sized in the compressed case)
-        let header = BlockHeader::new(self.zbuf.len() as u64);
+        let header = BlockHeader::new(self.zbuf.len() as u64, self.starts.len() as u64);
 
         // Write the block header and compressed block
         header.write_bytes(inner)?;
@@ -454,7 +454,7 @@ impl BlockWriter {
 
     fn flush_uncompressed<W: Write>(&mut self, inner: &mut W) -> Result<()> {
         // Build a block header (this is static in size in the uncompressed case)
-        let header = BlockHeader::new(self.block_size as u64);
+        let header = BlockHeader::new(self.block_size as u64, self.starts.len() as u64);
 
         // Write the block header and uncompressed block
         header.write_bytes(inner)?;
