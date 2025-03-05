@@ -84,6 +84,7 @@ impl VBinseqWriterBuilder {
 /// 1. Check if the current block can handle the next `Record` and if not, write the
 ///    block header (at the appropriate position) and start a new block.
 /// 2. Write the `Record` to the current block.
+#[derive(Clone)]
 pub struct VBinseqWriter<W: Write> {
     /// Inner Writer
     inner: W,
@@ -115,6 +116,16 @@ impl<W: Write> VBinseqWriter<W> {
     fn init(&mut self) -> Result<()> {
         self.header.write_bytes(&mut self.inner)?;
         Ok(())
+    }
+
+    /// Checks if the reader is expecting paired inputs
+    pub fn is_paired(&self) -> bool {
+        self.header.paired
+    }
+
+    /// Checks if the header has quality scores expected
+    pub fn has_quality(&self) -> bool {
+        self.header.qual
     }
 
     pub fn write_nucleotides(&mut self, flag: u64, sequence: &[u8]) -> Result<bool> {
@@ -317,6 +328,7 @@ impl<W: Write> Drop for VBinseqWriter<W> {
     }
 }
 
+#[derive(Clone)]
 struct BlockWriter {
     /// Current position in the block
     pos: usize,
@@ -574,6 +586,7 @@ impl BlockWriter {
 }
 
 /// Encapsulates the logic for encoding sequences into a binary format.
+#[derive(Clone)]
 pub struct Encoder {
     /// Reusable buffers for all nucleotides (written as 2-bit after conversion)
     sbuffer: Vec<u64>,
