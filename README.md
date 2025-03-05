@@ -75,4 +75,5 @@ Total size: 32 bytes
 | xqual | [u8]  | qual & paired ? xlen : 0     | Associated quality scores of extended sequence (no bytes if not paired + not tracking quality) |
 
 Total size: 24 + x bytes
+
 x = 8 \* (sbuf + xbuf) + (squal + xqual)
