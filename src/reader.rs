@@ -377,6 +377,10 @@ impl MmapReader {
         p.into()
     }
 
+    pub fn header(&self) -> VBinseqHeader {
+        self.header
+    }
+
     /// Fill an existing RecordBlock with the next block of records
     ///
     /// Returns false if EOF was reached, true if the block was filled
