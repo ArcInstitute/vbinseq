@@ -62,7 +62,7 @@ pub struct VBinseqHeader {
 
     /// Reserved remaining bytes for future use
     ///
-    /// 17 bytes
+    /// 16 bytes
     pub reserved: [u8; 16],
 }
 impl Default for VBinseqHeader {
