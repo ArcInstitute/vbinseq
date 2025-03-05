@@ -48,3 +48,16 @@ All binary encoding is little-endian unless specifically noted otherwise.
 | compressed | bool | 1            | 14               | Whether blocks are ZSTD compressed                   |
 | paired     | bool | 1            | 15               | Whether records are paired sequences                 |
 | reserved   | u8   | 16           | 16               | Reserved bytes in case of future extensions          |
+
+Total size: 32 bytes
+
+#### **BLOCK HEADER**
+
+| Field    | Type | Size (bytes) | Position (bytes) | Description                                                                                                               |
+| -------- | ---- | ------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| magic    | u64  | 8            | 0                | A magic number to validate format (BLOCKSEQ)                                                                              |
+| size     | u64  | 8            | 8                | Actual size of the block in bytes (can be different than configured block size in header depending on compression status) |
+| records  | u32  | 4            | 16               | Number of records in block                                                                                                |
+| reserved | u8   | 12           | 20               | Reserved bytes in case of future extensions                                                                               |
+
+Total size: 32 bytes
