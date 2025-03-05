@@ -14,23 +14,47 @@ use crate::{
 };
 
 /// Size of BlockRange in bytes
-pub const SIZE_BLOCK_RANGE: usize = 16;
+pub const SIZE_BLOCK_RANGE: usize = 32;
 /// Size of IndexHeader in bytes
 pub const INDEX_HEADER_SIZE: usize = 32;
 /// Magic number to designate index (VBQINDEX)
 pub const INDEX_MAGIC: u64 = 0x5845444e49514256;
+/// Index Block Reservation
+pub const INDEX_RESERVATION: [u8; 8] = [42; 8];
 
 /// Descriptor of the dimensions of a Block
 #[derive(Debug, Clone, Copy)]
 pub struct BlockRange {
     /// File offset where the block starts (including block header + file header)
+    ///
+    /// (8 bytes)
     pub start_offset: u64,
     /// Actual size of the block
+    ///
+    /// (8 bytes)
     pub len: u64,
+    /// Number of records in block
+    ///
+    /// (4 bytes)
+    pub block_records: u32,
+    /// Cumulative number of records
+    ///
+    /// (4 bytes)
+    pub cumulative_records: u32,
+    /// Future extension reservation
+    ///
+    /// (8 bytes)
+    pub reservation: [u8; 8],
 }
 impl BlockRange {
-    pub fn new(start_offset: u64, len: u64) -> Self {
-        Self { start_offset, len }
+    pub fn new(start_offset: u64, len: u64, block_records: u32, cumulative_records: u32) -> Self {
+        Self {
+            start_offset,
+            len,
+            block_records,
+            cumulative_records,
+            reservation: INDEX_RESERVATION,
+        }
     }
 
     /// Write self into a write handle
@@ -38,6 +62,9 @@ impl BlockRange {
         let mut buf = [0; SIZE_BLOCK_RANGE];
         LittleEndian::write_u64(&mut buf[0..8], self.start_offset);
         LittleEndian::write_u64(&mut buf[8..16], self.len);
+        LittleEndian::write_u32(&mut buf[16..20], self.block_records);
+        LittleEndian::write_u32(&mut buf[20..24], self.cumulative_records);
+        buf[24..].copy_from_slice(&self.reservation);
         writer.write_all(&buf)?;
         Ok(())
     }
@@ -47,6 +74,9 @@ impl BlockRange {
         Self {
             start_offset: LittleEndian::read_u64(&buffer[0..8]),
             len: LittleEndian::read_u64(&buffer[8..16]),
+            block_records: LittleEndian::read_u32(&buffer[16..20]),
+            cumulative_records: LittleEndian::read_u32(&buffer[20..24]),
+            reservation: INDEX_RESERVATION,
         }
     }
 
@@ -163,14 +193,21 @@ impl BlockIndex {
         let mut index = BlockIndex::new(index_header);
 
         // Find all block headers
+        let mut record_total = 0;
         while pos < mmap.len() {
             let block_header = {
                 let mut header_bytes = [0u8; SIZE_BLOCK_HEADER];
                 header_bytes.copy_from_slice(&mmap[pos..pos + SIZE_BLOCK_HEADER]);
                 BlockHeader::from_bytes(&header_bytes)?
             };
-            index.add_range(BlockRange::new(pos as u64, block_header.size));
+            index.add_range(BlockRange::new(
+                pos as u64,
+                block_header.size,
+                block_header.records,
+                record_total,
+            ));
             pos += SIZE_BLOCK_HEADER + block_header.size as usize;
+            record_total += block_header.records;
         }
 
         Ok(index)
@@ -222,7 +259,10 @@ impl BlockIndex {
 
     pub fn pprint(&self) {
         self.ranges.iter().for_each(|range| {
-            println!("{}\t{}", range.start_offset, range.len);
+            println!(
+                "{}\t{}\t{}\t{}",
+                range.start_offset, range.len, range.block_records, range.cumulative_records
+            );
         })
     }
 }
