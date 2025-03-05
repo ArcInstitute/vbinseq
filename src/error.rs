@@ -18,6 +18,8 @@ pub enum Error {
     Utf8Error(#[from] std::str::Utf8Error),
     #[error("Bitnuc error: {0}")]
     BitnucError(#[from] bitnuc::NucleotideError),
+    #[error("Generic error: {0}")]
+    AnyhowError(#[from] anyhow::Error),
 }
 impl Error {
     pub fn is_index_mismatch(&self) -> bool {
