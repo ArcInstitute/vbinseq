@@ -17,6 +17,9 @@ fn encoded_sequence_len(len: u64) -> usize {
 }
 
 pub struct RecordBlock {
+    /// Index of the first record in the block
+    index: usize,
+
     /// Buffer: All flags in the block
     flags: Vec<u64>,
 
@@ -38,6 +41,7 @@ pub struct RecordBlock {
 impl RecordBlock {
     pub fn new(block_size: usize) -> Self {
         Self {
+            index: 0,
             flags: Vec::new(),
             lens: Vec::new(),
             sequences: Vec::new(),
@@ -55,7 +59,13 @@ impl RecordBlock {
         RecordBlockIter::new(self)
     }
 
+    /// Updates the starting index of the block
+    fn update_index(&mut self, index: usize) {
+        self.index = index;
+    }
+
     pub fn clear(&mut self) {
+        self.index = 0;
         self.flags.clear();
         self.lens.clear();
         self.sequences.clear();
@@ -231,6 +241,7 @@ impl<'a> Iterator for RecordBlockIter<'a> {
         if self.rpos == self.block.n_records() {
             return None;
         }
+        let index = (self.block.index + self.rpos) as u64;
         let flag = self.block.flags[self.rpos];
         let slen = self.block.lens[2 * self.rpos];
         let xlen = self.block.lens[(2 * self.rpos) + 1];
@@ -257,12 +268,13 @@ impl<'a> Iterator for RecordBlockIter<'a> {
         self.rpos += 1;
 
         Some(RefRecord::new(
-            flag, slen, xlen, s_seq, x_seq, s_qual, x_qual,
+            index, flag, slen, xlen, s_seq, x_seq, s_qual, x_qual,
         ))
     }
 }
 
 pub struct RefRecord<'a> {
+    index: u64,
     flag: u64,
     slen: u64,
     xlen: u64,
@@ -273,6 +285,7 @@ pub struct RefRecord<'a> {
 }
 impl<'a> RefRecord<'a> {
     pub fn new(
+        index: u64,
         flag: u64,
         slen: u64,
         xlen: u64,
@@ -282,6 +295,7 @@ impl<'a> RefRecord<'a> {
         xqual: &'a [u8],
     ) -> Self {
         Self {
+            index,
             flag,
             slen,
             xlen,
@@ -290,6 +304,9 @@ impl<'a> RefRecord<'a> {
             squal,
             xqual,
         }
+    }
+    pub fn index(&self) -> u64 {
+        self.index
     }
     pub fn flag(&self) -> u64 {
         self.flag
@@ -340,6 +357,9 @@ pub struct MmapReader {
 
     /// Cursor position in the file
     pos: usize,
+
+    /// Cumulative total of records read so far
+    total: usize,
 }
 impl MmapReader {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
@@ -364,6 +384,7 @@ impl MmapReader {
             mmap: Arc::new(mmap),
             header,
             pos: SIZE_HEADER,
+            total: 0,
         })
     }
 
@@ -412,7 +433,12 @@ impl MmapReader {
         } else {
             block.ingest_bytes(block_buffer, self.header.qual)?;
         }
+
+        // Update the block index
+        block.update_index(self.total);
+
         self.pos += rbound;
+        self.total += header.records as usize;
 
         Ok(true)
     }
@@ -502,6 +528,9 @@ impl MmapReader {
                     } else {
                         record_block.ingest_bytes(block_data, header.qual)?;
                     }
+
+                    // Update the record block index
+                    record_block.update_index(block_range.cumulative_records as usize);
 
                     // Process each record in the block
                     for record in record_block.iter() {
