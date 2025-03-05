@@ -320,6 +320,12 @@ impl<'a> RefRecord<'a> {
         bitnuc::decode(self.xbuf, self.xlen as usize, dbuf)?;
         Ok(())
     }
+    pub fn is_paired(&self) -> bool {
+        self.xlen > 0
+    }
+    pub fn has_quality(&self) -> bool {
+        !self.squal.is_empty()
+    }
 }
 
 pub struct MmapReader {
