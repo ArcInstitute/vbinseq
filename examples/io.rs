@@ -135,10 +135,13 @@ fn read_set(filepath: &str) -> Result<()> {
                 writeln!(
                     &mut writer,
                     "@seq.{}\n{}\n+\n{}",
-                    n_records, seq_str, qual_str
+                    record.index(),
+                    seq_str,
+                    qual_str
                 )?;
             }
             dbuf.clear();
+            assert_eq!(record.index(), n_records);
             n_records += 1;
         }
         n_blocks += 1;

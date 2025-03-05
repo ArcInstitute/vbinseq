@@ -59,7 +59,7 @@ impl ParallelProcessor for Decoder {
         };
 
         // write fastq to local buffer
-        write_fastq(&mut self.buffer, &self.dbuf, qual_buf)?;
+        write_fastq(&mut self.buffer, record.index(), &self.dbuf, qual_buf)?;
 
         self.local_records += 1;
 
@@ -88,10 +88,11 @@ impl ParallelProcessor for Decoder {
 
 fn write_fastq<W: Write>(
     buffer: &mut W,
+    index: u64,
     sequence: &[u8],
     quality: &[u8],
 ) -> Result<(), std::io::Error> {
-    buffer.write_all(b"@seq\n")?;
+    write!(buffer, "@seq.{index}\n")?;
     buffer.write_all(sequence)?;
     buffer.write_all(b"\n+\n")?;
     buffer.write_all(quality)?;
