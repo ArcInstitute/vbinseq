@@ -61,3 +61,18 @@ Total size: 32 bytes
 | reserved | u8   | 12           | 20               | Reserved bytes in case of future extensions                                                                               |
 
 Total size: 32 bytes
+
+#### **VBINSEQ RECORD**
+
+| Field | Type  | Size (bytes)                 | Description                                                                                    |
+| ----- | ----- | ---------------------------- | ---------------------------------------------------------------------------------------------- |
+| flag  | u64   | 8                            | A binary flag for the record                                                                   |
+| slen  | u64   | 8                            | The length of the primary sequence in record (basepairs)                                       |
+| xlen  | u64   | 8                            | The length of the extended sequence in record (0 if not paired)                                |
+| sbuf  | [u64] | ceil(slen / 32)              | Encoded primary sequence                                                                       |
+| squal | [u8]  | qual ? slen : 0              | Associated quality scores of primary sequence (no bytes if not tracking quality)               |
+| xbuf  | [u64] | paired ? ceil(xlen / 32) : 0 | Encoded extended sequence (no bytes if not paired)                                             |
+| xqual | [u8]  | qual & paired ? xlen : 0     | Associated quality scores of extended sequence (no bytes if not paired + not tracking quality) |
+
+Total size: 24 + x bytes
+x = 8 \* (sbuf + xbuf) + (squal + xqual)
