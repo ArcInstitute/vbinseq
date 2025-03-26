@@ -378,14 +378,72 @@ impl<'a> Iterator for RecordBlockIter<'a> {
     }
 }
 
+/// A reference to a record in a VBINSEQ file
+///
+/// `RefRecord` provides a lightweight view into a record within a `RecordBlock`.
+/// It holds references to the underlying data rather than owning it, making it
+/// efficient to iterate through records without copying data.
+///
+/// Each record contains a primary sequence (accessible via `sbuf` and related methods)
+/// and optionally a paired/extended sequence (accessible via `xbuf` and related methods).
+/// Both sequences may also have associated quality scores.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use vbinseq::MmapReader;
+///
+/// let mut reader = MmapReader::new("example.vbq").unwrap();
+/// let mut block = reader.new_block();
+/// reader.read_block_into(&mut block).unwrap();
+///
+/// let mut sequence = Vec::new();
+///
+/// for record in block.iter() {
+///     // Get record metadata
+///     println!("Record {}, flag: {}", record.index(), record.flag());
+///     
+///     // Decode the primary sequence
+///     record.decode_s(&mut sequence).unwrap();
+///     println!("Sequence: {}", std::str::from_utf8(&sequence).unwrap());
+///     sequence.clear();
+///     
+///     // If this is a paired record, decode the paired sequence
+///     if record.is_paired() {
+///         record.decode_x(&mut sequence).unwrap();
+///         println!("Paired sequence: {}", std::str::from_utf8(&sequence).unwrap());
+///         sequence.clear();
+///     }
+///     
+///     // Access quality scores if available
+///     if record.has_quality() {
+///         println!("Quality scores available");
+///     }
+/// }
+/// ```
 pub struct RefRecord<'a> {
+    /// Global index of this record within the file
     index: u64,
+    
+    /// Flag value for this record (can be used for custom metadata)
     flag: u64,
+    
+    /// Length of the primary sequence in nucleotides
     slen: u64,
+    
+    /// Length of the extended/paired sequence in nucleotides (0 if not paired)
     xlen: u64,
+    
+    /// Buffer containing the encoded primary nucleotide sequence
     sbuf: &'a [u64],
+    
+    /// Buffer containing the encoded extended/paired nucleotide sequence
     xbuf: &'a [u64],
+    
+    /// Quality scores for the primary sequence (empty if quality scores not present)
     squal: &'a [u8],
+    
+    /// Quality scores for the extended/paired sequence (empty if not paired or no quality)
     xqual: &'a [u8],
 }
 impl<'a> RefRecord<'a> {
@@ -411,41 +469,226 @@ impl<'a> RefRecord<'a> {
             xqual,
         }
     }
+    /// Returns the global index of this record within the file
+    ///
+    /// The index represents the position of this record in the overall file,
+    /// starting from 0 for the first record.
+    ///
+    /// # Returns
+    ///
+    /// The index of this record
     pub fn index(&self) -> u64 {
         self.index
     }
+    /// Returns the flag value for this record
+    ///
+    /// The flag can be used to store arbitrary metadata about the record.
+    /// The interpretation of the flag value is application-specific.
+    ///
+    /// # Returns
+    ///
+    /// The flag value for this record
     pub fn flag(&self) -> u64 {
         self.flag
     }
+    /// Returns the length of the primary nucleotide sequence
+    ///
+    /// # Returns
+    ///
+    /// The length of the primary sequence in nucleotides
     pub fn slen(&self) -> u64 {
         self.slen
     }
+    /// Returns the length of the extended/paired nucleotide sequence
+    ///
+    /// This will be 0 if the record is not paired.
+    ///
+    /// # Returns
+    ///
+    /// The length of the extended/paired sequence in nucleotides
     pub fn xlen(&self) -> u64 {
         self.xlen
     }
+    /// Returns a reference to the encoded primary nucleotide sequence buffer
+    ///
+    /// This provides access to the raw 2-bit encoded sequence data. In most cases,
+    /// you should use `decode_s()` instead to get the decoded sequence.
+    ///
+    /// # Returns
+    ///
+    /// A reference to the buffer containing the encoded primary sequence
     pub fn sbuf(&self) -> &[u64] {
         self.sbuf
     }
+    /// Returns a reference to the encoded extended/paired nucleotide sequence buffer
+    ///
+    /// This provides access to the raw 2-bit encoded sequence data. In most cases,
+    /// you should use `decode_x()` instead to get the decoded sequence.
+    ///
+    /// # Returns
+    ///
+    /// A reference to the buffer containing the encoded extended/paired sequence
     pub fn xbuf(&self) -> &[u64] {
         self.xbuf
     }
+    /// Returns a reference to the quality scores for the primary sequence
+    ///
+    /// Quality scores are represented as bytes, with one byte per nucleotide.
+    /// This will be empty if the file doesn't contain quality scores.
+    ///
+    /// # Returns
+    ///
+    /// A reference to the buffer containing the quality scores for the primary sequence
     pub fn squal(&self) -> &[u8] {
         self.squal
     }
+    /// Returns a reference to the quality scores for the extended/paired sequence
+    ///
+    /// Quality scores are represented as bytes, with one byte per nucleotide.
+    /// This will be empty if the file doesn't contain quality scores or if the record
+    /// is not paired.
+    ///
+    /// # Returns
+    ///
+    /// A reference to the buffer containing the quality scores for the extended/paired sequence
     pub fn xqual(&self) -> &[u8] {
         self.xqual
     }
+    /// Decodes the primary nucleotide sequence into ASCII characters
+    ///
+    /// This method converts the 2-bit encoded nucleotide sequence (where each nucleotide is
+    /// represented by 2 bits) into a sequence of ASCII characters (A, C, G, T). The encoded
+    /// format allows for efficient storage (4 nucleotides per byte), while the decoded format
+    /// is easier to work with and display.
+    ///
+    /// # Parameters
+    ///
+    /// * `dbuf` - A mutable vector that will be cleared and then filled with the decoded
+    ///            nucleotide sequence as ASCII characters
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If the decoding was successful
+    /// * `Err(_)` - If an error occurred during decoding
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use vbinseq::MmapReader;
+    /// # let mut reader = MmapReader::new("example.vbq").unwrap();
+    /// # let mut block = reader.new_block();
+    /// # reader.read_block_into(&mut block).unwrap();
+    /// 
+    /// let mut sequence = Vec::new();
+    /// 
+    /// for record in block.iter() {
+    ///     // Decode the nucleotide sequence
+    ///     record.decode_s(&mut sequence).unwrap();
+    ///     
+    ///     // Convert to a string for display
+    ///     let sequence_str = std::str::from_utf8(&sequence).unwrap();
+    ///     println!("Sequence: {}", sequence_str);
+    ///     
+    ///     // Clear the buffer for reuse
+    ///     sequence.clear();
+    /// }
+    /// ```
     pub fn decode_s(&self, dbuf: &mut Vec<u8>) -> Result<()> {
         bitnuc::decode(self.sbuf, self.slen as usize, dbuf)?;
         Ok(())
     }
+    /// Decodes the extended/paired nucleotide sequence into ASCII characters
+    ///
+    /// This method converts the 2-bit encoded paired nucleotide sequence into a sequence of
+    /// ASCII characters (A, C, G, T). For paired-end sequencing data, this typically
+    /// represents the second read in a pair.
+    ///
+    /// This method should only be called if `is_paired()` returns true, otherwise there
+    /// is no extended sequence to decode.
+    ///
+    /// # Parameters
+    ///
+    /// * `dbuf` - A mutable vector that will be cleared and then filled with the decoded
+    ///            nucleotide sequence as ASCII characters
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If the decoding was successful
+    /// * `Err(_)` - If an error occurred during decoding
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use vbinseq::MmapReader;
+    /// # let mut reader = MmapReader::new("example.vbq").unwrap();
+    /// # let mut block = reader.new_block();
+    /// # reader.read_block_into(&mut block).unwrap();
+    /// 
+    /// let mut sequence = Vec::new();
+    /// 
+    /// for record in block.iter() {
+    ///     // Only decode the paired sequence if it exists
+    ///     if record.is_paired() {
+    ///         record.decode_x(&mut sequence).unwrap();
+    ///         
+    ///         // Convert to a string for display
+    ///         let sequence_str = std::str::from_utf8(&sequence).unwrap();
+    ///         println!("Paired sequence: {}", sequence_str);
+    ///         
+    ///         // Clear the buffer for reuse
+    ///         sequence.clear();
+    ///     }
+    /// }
+    /// ```
     pub fn decode_x(&self, dbuf: &mut Vec<u8>) -> Result<()> {
         bitnuc::decode(self.xbuf, self.xlen as usize, dbuf)?;
         Ok(())
     }
+    /// Checks if this record has a paired/extended sequence
+    ///
+    /// # Returns
+    ///
+    /// `true` if this record has a paired sequence, `false` otherwise
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use vbinseq::MmapReader;
+    /// # let mut reader = MmapReader::new("example.vbq").unwrap();
+    /// # let mut block = reader.new_block();
+    /// # reader.read_block_into(&mut block).unwrap();
+    /// for record in block.iter() {
+    ///     if record.is_paired() {
+    ///         println!("Record {} is paired", record.index());
+    ///     } else {
+    ///         println!("Record {} is not paired", record.index());
+    ///     }
+    /// }
+    /// ```
     pub fn is_paired(&self) -> bool {
         self.xlen > 0
     }
+    /// Checks if this record has quality scores
+    ///
+    /// # Returns
+    ///
+    /// `true` if this record has quality scores, `false` otherwise
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use vbinseq::MmapReader;
+    /// # let mut reader = MmapReader::new("example.vbq").unwrap();
+    /// # let mut block = reader.new_block();
+    /// # reader.read_block_into(&mut block).unwrap();
+    /// for record in block.iter() {
+    ///     if record.has_quality() {
+    ///         println!("Record {} has quality scores", record.index());
+    ///         // Access quality scores for primary sequence
+    ///         let primary_qualities = record.squal();
+    ///     }
+    /// }
+    /// ```
     pub fn has_quality(&self) -> bool {
         !self.squal.is_empty()
     }
@@ -594,9 +837,51 @@ impl MmapReader {
         self.header
     }
 
-    /// Fill an existing RecordBlock with the next block of records
+    /// Fills an existing RecordBlock with the next block of records from the file
     ///
-    /// Returns false if EOF was reached, true if the block was filled
+    /// This method reads the next block of records from the current position in the file
+    /// and populates the provided `RecordBlock` with the data. The block is cleared and reused
+    /// to avoid unnecessary memory allocations. This is the primary method for sequential
+    /// reading of VBINSEQ files.
+    ///
+    /// The method automatically handles decompression if the file was written with
+    /// compression enabled and updates the total record count as it progresses through the file.
+    ///
+    /// # Parameters
+    ///
+    /// * `block` - A mutable reference to a `RecordBlock` to be filled with data
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(true)` - If a block was successfully read
+    /// * `Ok(false)` - If the end of the file was reached (no more blocks)
+    /// * `Err(_)` - If an error occurred during reading
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use vbinseq::MmapReader;
+    /// use std::io::Write;
+    ///
+    /// let mut reader = MmapReader::new("example.vbq").unwrap();
+    /// let mut block = reader.new_block();
+    /// let mut sequence_buffer = Vec::new();
+    ///
+    /// // Read blocks until the end of file
+    /// while reader.read_block_into(&mut block).unwrap() {
+    ///     println!("Read block with {} records", block.n_records());
+    ///     
+    ///     // Process each record
+    ///     for record in block.iter() {
+    ///         // Decode the nucleotide sequence
+    ///         record.decode_s(&mut sequence_buffer).unwrap();
+    ///         
+    ///         // Do something with the sequence
+    ///         println!("Record {}: length {}", record.index(), sequence_buffer.len());
+    ///         sequence_buffer.clear();
+    ///     }
+    /// }
+    /// ```
     pub fn read_block_into(&mut self, block: &mut RecordBlock) -> Result<bool> {
         // Clear the block
         block.clear();
@@ -635,6 +920,43 @@ impl MmapReader {
         Ok(true)
     }
 
+    /// Loads or creates the block index for this VBINSEQ file
+    ///
+    /// The block index provides metadata about each block in the file, enabling
+    /// random access to blocks and parallel processing. This method first attempts to
+    /// load an existing index file. If the index doesn't exist or doesn't match the
+    /// current file, it automatically generates a new index from the VBINSEQ file
+    /// and saves it for future use.
+    ///
+    /// # Returns
+    ///
+    /// The loaded or newly created `BlockIndex` if successful
+    ///
+    /// # Errors
+    ///
+    /// * File I/O errors when reading or creating the index
+    /// * Parsing errors if the VBINSEQ file has invalid format
+    /// * Other index-related errors that cannot be resolved by creating a new index
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use vbinseq::MmapReader;
+    ///
+    /// let reader = MmapReader::new("example.vbq").unwrap();
+    ///
+    /// // Load the index file (or create if it doesn't exist)
+    /// let index = reader.load_index().unwrap();
+    ///
+    /// // Use the index to get information about the file
+    /// println!("Number of blocks: {}", index.n_blocks());
+    /// ```
+    ///
+    /// # Notes
+    ///
+    /// The index file is stored with the same path as the VBINSEQ file but with a ".vqi" 
+    /// extension appended. This allows for reusing the index across multiple runs,
+    /// which can significantly improve startup performance for large files.
     pub fn load_index(&self) -> Result<BlockIndex> {
         if self.index_path().exists() {
             match BlockIndex::from_path(self.index_path()) {
@@ -658,10 +980,102 @@ impl MmapReader {
 }
 
 impl MmapReader {
-    /// Process records in parallel using the provided processor
+    /// Processes all records in the file in parallel using multiple threads
     ///
-    /// This method uses the block structure to divide work among threads,
-    /// with each thread processing a subset of blocks independently.
+    /// This method provides efficient parallel processing of VBINSEQ files by distributing
+    /// blocks across multiple worker threads. The file's block structure is leveraged to divide
+    /// the work evenly without requiring thread synchronization during processing, which leads
+    /// to near-linear scaling with the number of threads.
+    ///
+    /// The method automatically loads or creates an index file to identify block boundaries,
+    /// then distributes the blocks among the requested number of threads. Each thread processes
+    /// its assigned blocks sequentially, but multiple blocks are processed in parallel across
+    /// threads.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `P` - A type that implements the `ParallelProcessor` trait, which defines how records are processed
+    ///
+    /// # Parameters
+    ///
+    /// * `self` - Consumes the reader, as it will be used across multiple threads
+    /// * `processor` - An instance of a type implementing `ParallelProcessor` that will be cloned for each thread
+    /// * `num_threads` - Number of worker threads to use for processing
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If all records were successfully processed
+    /// * `Err(_)` - If an error occurs during processing
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use vbinseq::{MmapReader, ParallelProcessor, RefRecord, Result};
+    /// use std::sync::atomic::{AtomicUsize, Ordering};
+    /// use std::sync::Arc;
+    ///
+    /// // Create a simple processor that counts records
+    /// struct RecordCounter {
+    ///     count: Arc<AtomicUsize>,
+    ///     thread_id: usize,
+    /// }
+    ///
+    /// impl RecordCounter {
+    ///     fn new() -> Self {
+    ///         Self {
+    ///             count: Arc::new(AtomicUsize::new(0)),
+    ///             thread_id: 0,
+    ///         }
+    ///     }
+    ///
+    ///     fn total_count(&self) -> usize {
+    ///         self.count.load(Ordering::Relaxed)
+    ///     }
+    /// }
+    ///
+    /// impl Clone for RecordCounter {
+    ///     fn clone(&self) -> Self {
+    ///         Self {
+    ///             count: Arc::clone(&self.count),
+    ///             thread_id: 0,
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// impl ParallelProcessor for RecordCounter {
+    ///     fn process_record(&mut self, _record: RefRecord) -> Result<()> {
+    ///         self.count.fetch_add(1, Ordering::Relaxed);
+    ///         Ok(())
+    ///     }
+    ///
+    ///     fn on_batch_complete(&mut self) -> Result<()> {
+    ///         // Optional: perform actions after each block is processed
+    ///         Ok(())
+    ///     }
+    ///
+    ///     fn set_tid(&mut self, tid: usize) {
+    ///         self.thread_id = tid;
+    ///     }
+    /// }
+    ///
+    /// // Use the processor with a VBINSEQ file
+    /// let reader = MmapReader::new("example.vbq").unwrap();
+    /// let counter = RecordCounter::new();
+    ///
+    /// // Process the file with 4 threads
+    /// reader.process_parallel(counter.clone(), 4).unwrap();
+    ///
+    /// // Get the total number of records processed
+    /// println!("Total records: {}", counter.total_count());
+    /// ```
+    ///
+    /// # Notes
+    ///
+    /// * The `ParallelProcessor` instance is cloned for each worker thread, so any shared state
+    ///   should be wrapped in thread-safe containers like `Arc`.
+    /// * The `set_tid` method is called with a unique thread ID before processing begins, which
+    ///   can be used to distinguish between worker threads.
+    /// * This method consumes the reader (takes ownership), as it's distributed across threads.
     pub fn process_parallel<P: ParallelProcessor + Clone + 'static>(
         self,
         processor: P,
