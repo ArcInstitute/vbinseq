@@ -284,6 +284,7 @@ pub struct RefRecord<'a> {
     xqual: &'a [u8],
 }
 impl<'a> RefRecord<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         index: u64,
         flag: u64,
