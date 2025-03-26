@@ -12,33 +12,82 @@ use crate::{
     BlockHeader, BlockIndex, BlockRange, ParallelProcessor, Result, VBinseqHeader,
 };
 
+/// Calculates the number of 64-bit words needed to store a nucleotide sequence of the given length
+/// 
+/// Nucleotides are packed into 64-bit words with 2 bits per nucleotide (32 nucleotides per word).
+/// This function calculates how many 64-bit words are needed to encode a sequence of a given length.
+/// 
+/// # Parameters
+/// 
+/// * `len` - Length of the nucleotide sequence in basepairs
+/// 
+/// # Returns
+/// 
+/// The number of 64-bit words required to encode the sequence
 fn encoded_sequence_len(len: u64) -> usize {
     len.div_ceil(32) as usize
 }
 
+/// A container for a block of VBINSEQ records
+/// 
+/// The `RecordBlock` struct represents a single block of records read from a VBINSEQ file.
+/// It stores the raw data for multiple records in vectors, allowing efficient iteration
+/// over the records without copying memory for each record.
+/// 
+/// The `RecordBlock` is reused when reading blocks sequentially from a file, with its
+/// contents being cleared and replaced with each new block that is read.
+/// 
+/// # Examples
+/// 
+/// ```rust,no_run
+/// use vbinseq::MmapReader;
+/// 
+/// let reader = MmapReader::new("example.vbq").unwrap();
+/// let mut block = reader.new_block(); // Create a block with appropriate size
+/// ```
 pub struct RecordBlock {
     /// Index of the first record in the block
+    /// This allows records to maintain their global position in the file
     index: usize,
 
-    /// Buffer: All flags in the block
+    /// Buffer containing all record flags in the block
+    /// Each record has one flag value stored at the corresponding position
     flags: Vec<u64>,
 
-    /// Buffer: All lengths in the block
+    /// Buffer containing all sequence lengths in the block
+    /// For each record, two consecutive entries are stored: primary sequence length and extended sequence length
     lens: Vec<u64>,
 
-    /// Buffer: All packed sequences in the block
+    /// Buffer containing all packed nucleotide sequences in the block
+    /// Nucleotides are encoded as 2-bit values (4 nucleotides per byte)
     sequences: Vec<u64>,
 
-    /// Buffer: All quality scores in the block
+    /// Buffer containing all quality scores in the block
+    /// Quality scores are stored as raw bytes, one byte per nucleotide
     qualities: Vec<u8>,
 
-    /// Maximum block size
+    /// Maximum size of the block in bytes
+    /// This is derived from the file header's block size field
     block_size: usize,
 
-    /// Reusable u8 buffer used for reading compressed sequences
+    /// Reusable buffer for temporary storage during decompression
+    /// Using a reusable buffer reduces memory allocations
     rbuf: Vec<u8>,
 }
 impl RecordBlock {
+    /// Creates a new empty `RecordBlock` with the specified block size
+    /// 
+    /// The block size should match the one specified in the VBINSEQ file header
+    /// for proper operation. This is typically handled automatically when using
+    /// `MmapReader::new_block()`.
+    /// 
+    /// # Parameters
+    /// 
+    /// * `block_size` - Maximum size of the block in bytes
+    /// 
+    /// # Returns
+    /// 
+    /// A new empty `RecordBlock` instance
     pub fn new(block_size: usize) -> Self {
         Self {
             index: 0,
@@ -51,19 +100,59 @@ impl RecordBlock {
         }
     }
 
+    /// Returns the number of records in this block
+    /// 
+    /// # Returns
+    /// 
+    /// The number of records currently stored in this block
     pub fn n_records(&self) -> usize {
         self.flags.len()
     }
 
+    /// Returns an iterator over the records in this block
+    /// 
+    /// The iterator yields `RefRecord` instances that provide access to the record data
+    /// without copying the underlying data.
+    /// 
+    /// # Returns
+    /// 
+    /// An iterator over the records in this block
+    /// 
+    /// # Examples
+    /// 
+    /// ```rust,no_run
+    /// use vbinseq::MmapReader;
+    /// 
+    /// let mut reader = MmapReader::new("example.vbq").unwrap();
+    /// let mut block = reader.new_block();
+    /// reader.read_block_into(&mut block).unwrap();
+    /// 
+    /// // Iterate over records in the block
+    /// for record in block.iter() {
+    ///     println!("Record {}", record.index());
+    /// }
+    /// ```
     pub fn iter(&self) -> RecordBlockIter {
         RecordBlockIter::new(self)
     }
 
     /// Updates the starting index of the block
+    /// 
+    /// This is used internally to keep track of the global position of records
+    /// within the file, allowing each record to maintain its original index.
+    /// 
+    /// # Parameters
+    /// 
+    /// * `index` - The index of the first record in the block
     fn update_index(&mut self, index: usize) {
         self.index = index;
     }
 
+    /// Clears all data from the block
+    /// 
+    /// This method resets the block to an empty state, clearing all vectors and resetting
+    /// the index to 0. This is typically used when reusing a block for reading a new block
+    /// from a file.
     pub fn clear(&mut self) {
         self.index = 0;
         self.flags.clear();
@@ -72,6 +161,22 @@ impl RecordBlock {
         self.qualities.clear();
     }
 
+    /// Ingest the bytes from a block into the record block
+    /// 
+    /// This method takes a slice of bytes and processes it to extract
+    /// the records from the block. It is used when reading a block from
+    /// a file into a record block.
+    /// 
+    /// This is a private method used primarily for parallel processing.
+    /// 
+    /// # Parameters
+    /// 
+    /// * `bytes` - A slice of bytes containing the block data
+    /// * `has_quality` - A boolean indicating whether the block contains quality scores
+    /// 
+    /// # Returns
+    /// 
+    /// A `Result` indicating success or an error
     fn ingest_bytes(&mut self, bytes: &[u8], has_quality: bool) -> Result<()> {
         let mut pos = 0;
         loop {
@@ -346,23 +451,75 @@ impl<'a> RefRecord<'a> {
     }
 }
 
+/// Memory-mapped reader for VBINSEQ files
+/// 
+/// `MmapReader` provides efficient, memory-mapped access to VBINSEQ files. It allows
+/// sequential reading of record blocks and supports parallel processing of records.
+/// 
+/// Memory mapping allows the operating system to lazily load file contents as needed,
+/// which can be more efficient than standard file I/O, especially for large files.
+/// 
+/// # Examples
+/// 
+/// ```rust,no_run
+/// use vbinseq::MmapReader;
+/// 
+/// // Open a VBINSEQ file
+/// let mut reader = MmapReader::new("example.vbq").unwrap();
+/// 
+/// // Create a block to hold records
+/// let mut block = reader.new_block();
+/// 
+/// // Read blocks sequentially
+/// while reader.read_block_into(&mut block).unwrap() {
+///     println!("Read a block with {} records", block.n_records());
+///     // Process records...
+/// }
+/// ```
 pub struct MmapReader {
-    /// Path to the file
+    /// Path to the VBINSEQ file
     path: PathBuf,
 
-    /// Memory mapped file contents
+    /// Memory-mapped file contents for efficient access
     mmap: Arc<Mmap>,
 
-    /// Header information
+    /// Parsed header information from the file
     header: VBinseqHeader,
 
-    /// Cursor position in the file
+    /// Current cursor position in the file (in bytes)
     pos: usize,
 
-    /// Cumulative total of records read so far
+    /// Total number of records read from the file so far
     total: usize,
 }
 impl MmapReader {
+    /// Creates a new `MmapReader` for a VBINSEQ file
+    /// 
+    /// This method opens the specified file, memory-maps its contents, and reads the
+    /// VBINSEQ header information. The reader is positioned at the beginning of the first
+    /// record block after the header.
+    /// 
+    /// # Parameters
+    /// 
+    /// * `path` - Path to the VBINSEQ file to open
+    /// 
+    /// # Returns
+    /// 
+    /// A new `MmapReader` instance if successful
+    /// 
+    /// # Errors
+    /// 
+    /// * `ReadError::InvalidFileType` if the path doesn't point to a regular file
+    /// * I/O errors if the file can't be opened or memory-mapped
+    /// * Header validation errors if the file doesn't contain a valid VBINSEQ header
+    /// 
+    /// # Examples
+    /// 
+    /// ```rust,no_run
+    /// use vbinseq::MmapReader;
+    /// 
+    /// let reader = MmapReader::new("path/to/file.vbq").unwrap();
+    /// ```
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         // Verify it's a regular file before attempting to map
         let file = File::open(&path)?;
@@ -389,16 +546,50 @@ impl MmapReader {
         })
     }
 
+    /// Creates a new empty record block with the appropriate size for this file
+    /// 
+    /// This creates a `RecordBlock` with a block size matching the one specified in the 
+    /// file's header, ensuring it will be able to hold a full block of records.
+    /// 
+    /// # Returns
+    /// 
+    /// A new empty `RecordBlock` instance sized appropriately for this file
+    /// 
+    /// # Examples
+    /// 
+    /// ```rust,no_run
+    /// use vbinseq::MmapReader;
+    /// 
+    /// let reader = MmapReader::new("example.vbq").unwrap();
+    /// let mut block = reader.new_block();
+    /// ```
     pub fn new_block(&self) -> RecordBlock {
         RecordBlock::new(self.header.block as usize)
     }
 
+    /// Returns the path where the index file would be located
+    /// 
+    /// The index file is used for random access to blocks and has the same path as
+    /// the VBINSEQ file with the ".vqi" extension appended.
+    /// 
+    /// # Returns
+    /// 
+    /// The path where the index file would be located
     pub fn index_path(&self) -> PathBuf {
         let mut p = self.path.as_os_str().to_owned();
         p.push(".vqi");
         p.into()
     }
 
+    /// Returns a copy of the file's header information
+    /// 
+    /// The header contains information about the file format, including whether
+    /// quality scores are included, whether blocks are compressed, and whether
+    /// records are paired.
+    /// 
+    /// # Returns
+    /// 
+    /// A copy of the file's `VBinseqHeader`
     pub fn header(&self) -> VBinseqHeader {
         self.header
     }
