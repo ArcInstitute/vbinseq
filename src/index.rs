@@ -57,7 +57,7 @@ pub struct BlockRange {
     ///
     /// (8 bytes in serialized form)
     pub start_offset: u64,
-    
+
     /// Length of the block data in bytes
     ///
     /// This is the size of the block data, not including the block header.
@@ -65,12 +65,12 @@ pub struct BlockRange {
     ///
     /// (8 bytes in serialized form)
     pub len: u64,
-    
+
     /// Number of records contained in this block
     ///
     /// (4 bytes in serialized form)
     pub block_records: u32,
-    
+
     /// Cumulative number of records up to and including this block
     ///
     /// This allows efficient determination of which block contains a specific record
@@ -78,7 +78,7 @@ pub struct BlockRange {
     ///
     /// (4 bytes in serialized form)
     pub cumulative_records: u32,
-    
+
     /// Reserved bytes for future extensions
     ///
     /// (8 bytes in serialized form)
@@ -214,13 +214,13 @@ pub struct IndexHeader {
     /// This is used to verify that a file is indeed a VBINSEQ index file.
     /// (8 bytes in serialized form)
     magic: u64,
-    
+
     /// Total size of the indexed VBINSEQ file in bytes
     ///
     /// This is used to verify that the index matches the file it references.
     /// (8 bytes in serialized form)
     bytes: u64,
-    
+
     /// Reserved bytes for future extensions
     ///
     /// (16 bytes in serialized form)
@@ -342,7 +342,7 @@ impl IndexHeader {
 pub struct BlockIndex {
     /// Header containing metadata about the indexed file
     header: IndexHeader,
-    
+
     /// Collection of block ranges, one for each block in the file
     ranges: Vec<BlockRange>,
 }
@@ -480,11 +480,11 @@ impl BlockIndex {
     ///
     /// // Get statistics about the file
     /// println!("File contains {} blocks", index.n_blocks());
-    /// 
+    ///
     /// // Analyze the record distribution
     /// if let Some(last_range) = index.ranges().last() {
     ///     println!("Total records: {}", last_range.cumulative_records);
-    ///     println!("Average records per block: {}", 
+    ///     println!("Average records per block: {}",
     ///              last_range.cumulative_records as f64 / index.n_blocks() as f64);
     /// }
     /// ```
@@ -589,10 +589,10 @@ impl BlockIndex {
     /// use std::path::Path;
     ///
     /// let index = BlockIndex::from_path(Path::new("example.vbq.vqi")).unwrap();
-    /// 
+    ///
     /// // Examine the ranges to determine which blocks to process
     /// for (i, range) in index.ranges().iter().enumerate() {
-    ///     println!("Block {}: {} records at offset {}", 
+    ///     println!("Block {}: {} records at offset {}",
     ///              i, range.block_records, range.start_offset);
     /// }
     /// ```

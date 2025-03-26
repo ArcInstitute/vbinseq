@@ -16,7 +16,7 @@
 //! // Create a VBINSEQ file writer
 //! let file = File::create("example.vbq").unwrap();
 //! let header = VBinseqHeader::with_capacity(128 * 1024, true, true, true);
-//! 
+//!
 //! let mut writer = VBinseqWriterBuilder::default()
 //!     .header(header)
 //!     .build(file)
@@ -709,10 +709,10 @@ impl<W: Write> VBinseqWriter<W> {
     /// let forward_quality = b"IIIIIIEEEEEE"; // Example quality scores
     /// let reverse_quality = b"EEEEEEIIIIEE"; // Example quality scores
     /// writer.write_nucleotides_quality_paired(
-    ///     flag, 
-    ///     forward_read, 
-    ///     reverse_read, 
-    ///     forward_quality, 
+    ///     flag,
+    ///     forward_read,
+    ///     reverse_read,
+    ///     forward_quality,
     ///     reverse_quality
     /// ).unwrap();
     /// ```
