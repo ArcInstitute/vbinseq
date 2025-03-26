@@ -1,3 +1,34 @@
+//! Writer implementation for VBINSEQ files
+//!
+//! This module provides functionality for writing sequence data to VBINSEQ files,
+//! including support for compression, quality scores, and paired-end reads.
+//!
+//! The VBINSEQ writer implements a block-based approach where records are packed
+//! into fixed-size blocks. Each block has a header containing metadata about the
+//! records it contains. Blocks may be optionally compressed using zstd compression.
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use vbinseq::{VBinseqWriterBuilder, VBinseqHeader};
+//! use std::fs::File;
+//!
+//! // Create a VBINSEQ file writer
+//! let file = File::create("example.vbq").unwrap();
+//! let header = VBinseqHeader::with_capacity(128 * 1024, true, true, true);
+//!
+//! let mut writer = VBinseqWriterBuilder::default()
+//!     .header(header)
+//!     .build(file)
+//!     .unwrap();
+//!
+//! // Write a nucleotide sequence
+//! let sequence = b"ACGTACGTACGT";
+//! writer.write_nucleotides(0, sequence).unwrap();
+//!
+//! // Writer will automatically flush when dropped
+//! ```
+
 use std::io::Write;
 
 use byteorder::{LittleEndian, WriteBytesExt};
@@ -9,31 +40,96 @@ use crate::error::{Result, WriteError};
 use crate::header::{BlockHeader, VBinseqHeader};
 use crate::Policy;
 
+/// Random number generator seed used for encoding
+///
+/// This is a fixed seed to ensure deterministic encoding across different runs.
 pub const RNG_SEED: u64 = 42;
 
-/// The record byte size is the size of the embedded buffer in bytes
-/// as well as the size of the flag and length of the buffer.
+/// Calculates the storage size in bytes required for a record without quality scores
 ///
-/// S = w(Cs + Cx + 3)
+/// This function calculates the total size needed to store a record in the VBINSEQ format,
+/// including the flag, sequence lengths, and the encoded sequence data. The formula
+/// used is: `S = w(Cs + Cx + 3)` where:
 ///
-/// Where:
-/// - w: word size (8 bytes)
-/// - Cs: Chunk size (primary sequence)
-/// - Cx: Chunk size (extended sequence)
-/// - 3: flag + slen + xlen
+/// - `w`: Word size (8 bytes)
+/// - `Cs`: Chunk size of the primary sequence in 64-bit words
+/// - `Cx`: Chunk size of the extended sequence in 64-bit words (for paired-end reads)
+/// - `3`: Additional words for flag, primary length, and extended length
+///
+/// # Parameters
+///
+/// * `schunk` - Number of 64-bit words needed for the primary sequence
+/// * `xchunk` - Number of 64-bit words needed for the extended sequence (0 for single-end)
+///
+/// # Returns
+///
+/// The total size in bytes needed to store the record
+///
+/// # Examples
+///
+/// ```
+/// use vbinseq::writer::record_byte_size;
+///
+/// // Calculate storage for a single-end read with 2 sequence chunks
+/// let size = record_byte_size(2, 0);
+/// assert_eq!(size, 8 * (2 + 0 + 3)); // 40 bytes
+/// ```
 pub fn record_byte_size(schunk: usize, xchunk: usize) -> usize {
     8 * (schunk + xchunk + 3)
 }
 
-/// The record byte size is the size of the embedded buffer in bytes
-/// plus the preamble (flag + slen + xlen)
+/// Calculates the storage size in bytes required for a record with quality scores
 ///
-/// This also includes the quality score length which is 1 byte per base.
+/// This function extends `record_byte_size` to include the additional space
+/// needed for quality scores, which require 1 byte per nucleotide base.
+///
+/// # Parameters
+///
+/// * `schunk` - Number of 64-bit words needed for the primary sequence
+/// * `xchunk` - Number of 64-bit words needed for the extended sequence (0 for single-end)
+/// * `slen` - Length of the primary sequence in bases
+/// * `xlen` - Length of the extended sequence in bases (0 for single-end)
+///
+/// # Returns
+///
+/// The total size in bytes needed to store the record with quality scores
+///
+/// # Examples
+///
+/// ```
+/// use vbinseq::writer::record_byte_size_quality;
+///
+/// // Calculate storage for a single-end read with 2 sequence chunks
+/// // and 12 bases (which will have 12 quality score bytes)
+/// let size = record_byte_size_quality(2, 0, 12, 0);
+/// assert_eq!(size, (8 * (2 + 0 + 3)) + 12); // 52 bytes
+/// ```
 pub fn record_byte_size_quality(schunk: usize, xchunk: usize, slen: usize, xlen: usize) -> usize {
     record_byte_size(schunk, xchunk) + slen + xlen
 }
 
-/// A builder for the VBinseqWriter
+/// A builder for creating configured VBinseqWriter instances
+///
+/// This builder provides a fluent interface for configuring and creating a
+/// `VBinseqWriter` with customized settings. It allows specifying the file header,
+/// encoding policy, and whether to operate in headless mode.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use vbinseq::{VBinseqWriterBuilder, VBinseqHeader, Policy};
+/// use std::fs::File;
+///
+/// // Create a writer with custom settings
+/// let file = File::create("example.vbq").unwrap();
+/// let mut writer = VBinseqWriterBuilder::default()
+///     .header(VBinseqHeader::with_capacity(65536, true, true, true))
+///     .policy(Policy::IgnoreSequence)
+///     .build(file)
+///     .unwrap();
+///
+/// // Use the writer...
+/// ```
 #[derive(Default)]
 pub struct VBinseqWriterBuilder {
     /// Header of the file
@@ -44,21 +140,114 @@ pub struct VBinseqWriterBuilder {
     headless: Option<bool>,
 }
 impl VBinseqWriterBuilder {
+    /// Sets the header for the VBINSEQ file
+    ///
+    /// The header defines the file format parameters such as block size, whether
+    /// the file contains quality scores, paired-end reads, and compression settings.
+    ///
+    /// # Parameters
+    ///
+    /// * `header` - The VBinseqHeader to use for the file
+    ///
+    /// # Returns
+    ///
+    /// The builder with the header configured
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use vbinseq::{VBinseqWriterBuilder, VBinseqHeader};
+    ///
+    /// // Create a header with 64KB blocks and quality scores
+    /// let mut header = VBinseqHeader::with_capacity(65536, true, true, true);
+    /// header.qual = true;
+    ///
+    /// let builder = VBinseqWriterBuilder::default().header(header);
+    /// ```
     pub fn header(mut self, header: VBinseqHeader) -> Self {
         self.header = Some(header);
         self
     }
 
+    /// Sets the encoding policy for nucleotide sequences
+    ///
+    /// The policy determines how sequences are encoded into the binary format.
+    /// Different policies offer trade-offs between compression ratio and compatibility
+    /// with different types of sequence data.
+    ///
+    /// # Parameters
+    ///
+    /// * `policy` - The encoding policy to use
+    ///
+    /// # Returns
+    ///
+    /// The builder with the encoding policy configured
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use vbinseq::{VBinseqWriterBuilder, Policy};
+    ///
+    /// let builder = VBinseqWriterBuilder::default().policy(Policy::IgnoreSequence);
+    /// ```
     pub fn policy(mut self, policy: Policy) -> Self {
         self.policy = Some(policy);
         self
     }
 
+    /// Sets whether to operate in headless mode
+    ///
+    /// In headless mode, the writer does not write a file header. This is useful
+    /// when creating part of a file that will be merged with other parts later,
+    /// such as in parallel writing scenarios.
+    ///
+    /// # Parameters
+    ///
+    /// * `headless` - Whether to operate in headless mode
+    ///
+    /// # Returns
+    ///
+    /// The builder with the headless mode configured
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use vbinseq::VBinseqWriterBuilder;
+    ///
+    /// // Create a headless writer for parallel writing
+    /// let builder = VBinseqWriterBuilder::default().headless(true);
+    /// ```
     pub fn headless(mut self, headless: bool) -> Self {
         self.headless = Some(headless);
         self
     }
 
+    /// Builds a VBinseqWriter with the configured settings
+    ///
+    /// This finalizes the builder and creates a new VBinseqWriter instance using
+    /// the provided writer and the configured settings. If any settings were not
+    /// explicitly set, default values will be used.
+    ///
+    /// # Parameters
+    ///
+    /// * `inner` - The underlying writer where data will be written
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(VBinseqWriter)` - A configured VBinseqWriter ready for use
+    /// * `Err(_)` - If an error occurred while initializing the writer
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use vbinseq::VBinseqWriterBuilder;
+    /// use std::fs::File;
+    ///
+    /// let file = File::create("example.vbq").unwrap();
+    /// let mut writer = VBinseqWriterBuilder::default()
+    ///     .build(file)
+    ///     .unwrap();
+    /// ```
     pub fn build<W: Write>(self, inner: W) -> Result<VBinseqWriter<W>> {
         VBinseqWriter::new(
             inner,
@@ -69,21 +258,51 @@ impl VBinseqWriterBuilder {
     }
 }
 
-/// A writer for the VBinseq format.
+/// Writer for VBINSEQ format files
 ///
-/// The main intuition of VBinseq to initially write a header that describes the
-/// internal block size of the format.
-/// Then each block is preceded by a block header that acts as a marker to the start
-/// of the block.
-/// Each block is then filled with complete `Record`s until either the block is full
-/// or no more complete `Record`s can be written to the block.
-/// The remainder of the block is left empty, and the next block is started after the
-/// length of the block.
+/// The `VBinseqWriter` handles writing nucleotide sequence data to VBINSEQ files in a
+/// block-based format. It manages the file structure, compression settings, and ensures
+/// data is properly encoded and organized.
 ///
-/// The writing step is composed of two main steps:
-/// 1. Check if the current block can handle the next `Record` and if not, write the
-///    block header (at the appropriate position) and start a new block.
-/// 2. Write the `Record` to the current block.
+/// ## File Structure
+///
+/// A VBINSEQ file consists of:
+/// 1. A file header that defines parameters like block size and compression settings
+/// 2. A series of blocks, each with:
+///    - A block header with metadata (e.g., record count)
+///    - A collection of encoded records
+///
+/// Each block is filled with records until either the block is full or no more complete
+/// records can fit. The writer automatically handles block boundaries and creates new
+/// blocks as needed.
+///
+/// ## Usage
+///
+/// The writer supports multiple formats:
+/// - Single-end sequences with or without quality scores
+/// - Paired-end sequences with or without quality scores
+///
+/// It's recommended to use the `VBinseqWriterBuilder` to create and configure a writer
+/// instance with the appropriate settings.
+///
+/// ```rust,no_run
+/// use vbinseq::{VBinseqWriterBuilder, VBinseqHeader};
+/// use std::fs::File;
+///
+/// // Create a writer for single-end reads
+/// let file = File::create("example.vbq").unwrap();
+/// let mut writer = VBinseqWriterBuilder::default()
+///     .header(VBinseqHeader::default())
+///     .build(file)
+///     .unwrap();
+///
+/// // Write a sequence
+/// let flag = 0; // No special flags
+/// let sequence = b"ACGTACGTACGT";
+/// writer.write_nucleotides(flag, sequence).unwrap();
+///
+/// // Writer automatically flushes when dropped
+/// ```
 #[derive(Clone)]
 pub struct VBinseqWriter<W: Write> {
     /// Inner Writer
@@ -112,22 +331,126 @@ impl<W: Write> VBinseqWriter<W> {
         Ok(wtr)
     }
 
-    /// Initialize the writer by writing the header and the first block header.
+    /// Initializes the writer by writing the file header
+    ///
+    /// This method is called automatically during creation unless headless mode is enabled.
+    /// It writes the VBinseqHeader to the underlying writer.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If the header was successfully written
+    /// * `Err(_)` - If an error occurred during writing
     fn init(&mut self) -> Result<()> {
         self.header.write_bytes(&mut self.inner)?;
         Ok(())
     }
 
-    /// Checks if the reader is expecting paired inputs
+    /// Checks if the writer is configured for paired-end reads
+    ///
+    /// This method returns whether the writer expects paired-end reads based on the
+    /// header settings. If true, you should use `write_paired_nucleotides` instead of
+    /// `write_nucleotides` to write sequences.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the writer is configured for paired-end reads, `false` otherwise
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use vbinseq::{VBinseqWriterBuilder, VBinseqHeader};
+    /// use std::fs::File;
+    ///
+    /// // Create a header for paired-end reads
+    /// let mut header = VBinseqHeader::default();
+    /// header.paired = true;
+    ///
+    /// let file = File::create("paired_reads.vbq").unwrap();
+    /// let writer = VBinseqWriterBuilder::default()
+    ///     .header(header)
+    ///     .build(file)
+    ///     .unwrap();
+    ///
+    /// assert!(writer.is_paired());
+    /// ```
     pub fn is_paired(&self) -> bool {
         self.header.paired
     }
 
-    /// Checks if the header has quality scores expected
+    /// Checks if the writer is configured for quality scores
+    ///
+    /// This method returns whether the writer expects quality scores based on the
+    /// header settings. If true, you should use methods that include quality scores
+    /// (`write_nucleotides_with_quality` or `write_paired_nucleotides_with_quality`)
+    /// to write sequences.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the writer is configured for quality scores, `false` otherwise
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use vbinseq::{VBinseqWriterBuilder, VBinseqHeader};
+    /// use std::fs::File;
+    ///
+    /// // Create a header for sequences with quality scores
+    /// let mut header = VBinseqHeader::default();
+    /// header.qual = true;
+    ///
+    /// let file = File::create("reads_with_quality.vbq").unwrap();
+    /// let writer = VBinseqWriterBuilder::default()
+    ///     .header(header)
+    ///     .build(file)
+    ///     .unwrap();
+    ///
+    /// assert!(writer.has_quality());
+    /// ```
     pub fn has_quality(&self) -> bool {
         self.header.qual
     }
 
+    /// Writes a single nucleotide sequence to the file
+    ///
+    /// This method encodes and writes a single nucleotide sequence to the VBINSEQ file.
+    /// It automatically handles block boundaries and will create a new block if the
+    /// current one cannot fit the encoded record.
+    ///
+    /// # Parameters
+    ///
+    /// * `flag` - A 64-bit flag that can store custom metadata about the sequence
+    /// * `sequence` - The nucleotide sequence to write (typically ASCII: A, C, G, T, N)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(true)` - If the sequence was successfully encoded and written
+    /// * `Ok(false)` - If the sequence could not be encoded (e.g., invalid characters)
+    /// * `Err(_)` - If an error occurred during writing or if the writer is configured
+    ///   for quality scores or paired-end reads
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The writer is configured for quality scores (`WriteError::QualityFlagSet`)
+    /// - The writer is configured for paired-end reads (`WriteError::PairedFlagSet`)
+    /// - An I/O error occurred while writing
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use vbinseq::{VBinseqWriterBuilder, VBinseqHeader};
+    /// use std::fs::File;
+    ///
+    /// let file = File::create("example.vbq").unwrap();
+    /// let mut writer = VBinseqWriterBuilder::default()
+    ///     .build(file)
+    ///     .unwrap();
+    ///
+    /// // Write a sequence with a custom flag
+    /// let flag = 0x1234; // Some arbitrary metadata
+    /// let sequence = b"ACGTACGTACGT";
+    /// writer.write_nucleotides(flag, sequence).unwrap();
+    /// ```
     pub fn write_nucleotides(&mut self, flag: u64, sequence: &[u8]) -> Result<bool> {
         // Validate the right write operation is being used
         if self.header.qual {
@@ -156,6 +479,54 @@ impl<W: Write> VBinseqWriter<W> {
         }
     }
 
+    /// Writes a paired-end nucleotide sequence to the file
+    ///
+    /// This method encodes and writes a paired-end nucleotide sequence (two related sequences)
+    /// to the VBINSEQ file. It automatically handles block boundaries and will create a new
+    /// block if the current one cannot fit the encoded record.
+    ///
+    /// # Parameters
+    ///
+    /// * `flag` - A 64-bit flag that can store custom metadata about the sequence pair
+    /// * `primary` - The primary nucleotide sequence (typically the forward read)
+    /// * `extended` - The extended nucleotide sequence (typically the reverse read)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(true)` - If the sequence pair was successfully encoded and written
+    /// * `Ok(false)` - If the sequence pair could not be encoded
+    /// * `Err(_)` - If an error occurred during writing or if the writer is not configured
+    ///   for paired-end reads
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The writer is configured for quality scores (`WriteError::QualityFlagSet`)
+    /// - The writer is not configured for paired-end reads (`WriteError::PairedFlagNotSet`)
+    /// - An I/O error occurred while writing
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use vbinseq::{VBinseqWriterBuilder, VBinseqHeader};
+    /// use std::fs::File;
+    ///
+    /// // Create a header for paired-end reads
+    /// let mut header = VBinseqHeader::default();
+    /// header.paired = true;
+    ///
+    /// let file = File::create("paired_reads.vbq").unwrap();
+    /// let mut writer = VBinseqWriterBuilder::default()
+    ///     .header(header)
+    ///     .build(file)
+    ///     .unwrap();
+    ///
+    /// // Write a paired sequence
+    /// let flag = 0;
+    /// let forward_read = b"ACGTACGTACGT";
+    /// let reverse_read = b"TGCATGCATGCA";
+    /// writer.write_nucleotides_paired(flag, forward_read, reverse_read).unwrap();
+    /// ```
     pub fn write_nucleotides_paired(
         &mut self,
         flag: u64,
@@ -196,7 +567,55 @@ impl<W: Write> VBinseqWriter<W> {
         }
     }
 
-    /// Writes nucleotides and quality scores to the writer.
+    /// Writes a nucleotide sequence with quality scores to the file
+    ///
+    /// This method encodes and writes a single nucleotide sequence with corresponding
+    /// quality scores to the VBINSEQ file. Quality scores are typically in the Phred scale
+    /// (encoded as ASCII characters). It automatically handles block boundaries and will
+    /// create a new block if the current one cannot fit the encoded record.
+    ///
+    /// # Parameters
+    ///
+    /// * `flag` - A 64-bit flag that can store custom metadata about the sequence
+    /// * `sequence` - The nucleotide sequence to write (typically ASCII: A, C, G, T, N)
+    /// * `quality` - The quality scores corresponding to each base in the sequence
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(true)` - If the sequence and quality scores were successfully encoded and written
+    /// * `Ok(false)` - If the sequence could not be encoded
+    /// * `Err(_)` - If an error occurred during writing or if the writer is not configured
+    ///   for quality scores
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The writer is not configured for quality scores (`WriteError::QualityFlagNotSet`)
+    /// - The writer is configured for paired-end reads (`WriteError::PairedFlagSet`)
+    /// - An I/O error occurred while writing
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use vbinseq::{VBinseqWriterBuilder, VBinseqHeader};
+    /// use std::fs::File;
+    ///
+    /// // Create a header for sequences with quality scores
+    /// let mut header = VBinseqHeader::default();
+    /// header.qual = true;
+    ///
+    /// let file = File::create("reads_with_quality.vbq").unwrap();
+    /// let mut writer = VBinseqWriterBuilder::default()
+    ///     .header(header)
+    ///     .build(file)
+    ///     .unwrap();
+    ///
+    /// // Write a sequence with quality scores
+    /// let flag = 0;
+    /// let sequence = b"ACGTACGTACGT";
+    /// let quality = b"IIIIIIEEEEEE"; // Example quality scores in ASCII format
+    /// writer.write_nucleotides_quality(flag, sequence, quality).unwrap();
+    /// ```
     pub fn write_nucleotides_quality(
         &mut self,
         flag: u64,
@@ -237,7 +656,66 @@ impl<W: Write> VBinseqWriter<W> {
         }
     }
 
-    /// Writes paired nucleotides and quality scores to the writer.
+    /// Writes paired-end nucleotide sequences with quality scores to the file
+    ///
+    /// This method encodes and writes paired-end nucleotide sequences with their corresponding
+    /// quality scores to the VBINSEQ file. It's designed for paired-end sequencing data where
+    /// each fragment is sequenced from both ends. The method automatically handles block
+    /// boundaries and will create a new block if the current one cannot fit the encoded record.
+    ///
+    /// # Parameters
+    ///
+    /// * `flag` - A 64-bit flag that can store custom metadata about the sequence pair
+    /// * `s_seq` - The primary nucleotide sequence (typically the forward read)
+    /// * `x_seq` - The extended nucleotide sequence (typically the reverse read)
+    /// * `s_qual` - The quality scores corresponding to each base in the primary sequence
+    /// * `x_qual` - The quality scores corresponding to each base in the extended sequence
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(true)` - If the sequences and quality scores were successfully encoded and written
+    /// * `Ok(false)` - If the sequences could not be encoded
+    /// * `Err(_)` - If an error occurred during writing or if the writer is not configured
+    ///   for quality scores and paired-end reads
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The writer is not configured for quality scores (`WriteError::QualityFlagNotSet`)
+    /// - The writer is not configured for paired-end reads (`WriteError::PairedFlagNotSet`)
+    /// - An I/O error occurred while writing
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use vbinseq::{VBinseqWriterBuilder, VBinseqHeader};
+    /// use std::fs::File;
+    ///
+    /// // Create a header for paired-end reads with quality scores
+    /// let mut header = VBinseqHeader::default();
+    /// header.qual = true;
+    /// header.paired = true;
+    ///
+    /// let file = File::create("paired_reads_with_quality.vbq").unwrap();
+    /// let mut writer = VBinseqWriterBuilder::default()
+    ///     .header(header)
+    ///     .build(file)
+    ///     .unwrap();
+    ///
+    /// // Write paired sequences with quality scores
+    /// let flag = 0;
+    /// let forward_read = b"ACGTACGTACGT";
+    /// let reverse_read = b"TGCATGCATGCA";
+    /// let forward_quality = b"IIIIIIEEEEEE"; // Example quality scores
+    /// let reverse_quality = b"EEEEEEIIIIEE"; // Example quality scores
+    /// writer.write_nucleotides_quality_paired(
+    ///     flag,
+    ///     forward_read,
+    ///     reverse_read,
+    ///     forward_quality,
+    ///     reverse_quality
+    /// ).unwrap();
+    /// ```
     pub fn write_nucleotides_quality_paired(
         &mut self,
         flag: u64,
@@ -281,7 +759,38 @@ impl<W: Write> VBinseqWriter<W> {
         }
     }
 
-    /// Finishes the internal writer.
+    /// Finishes writing and flushes all data to the underlying writer
+    ///
+    /// This method should be called when you're done writing to ensure all data
+    /// is properly flushed to the underlying writer. It's automatically called
+    /// when the writer is dropped, but calling it explicitly allows you to handle
+    /// any errors that might occur during flushing.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If all data was successfully flushed
+    /// * `Err(_)` - If an error occurred during flushing
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use vbinseq::{VBinseqWriterBuilder, VBinseqHeader};
+    /// use std::fs::File;
+    ///
+    /// let file = File::create("example.vbq").unwrap();
+    /// let mut writer = VBinseqWriterBuilder::default()
+    ///     .build(file)
+    ///     .unwrap();
+    ///
+    /// // Write some sequences...
+    /// let sequence = b"ACGTACGTACGT";
+    /// writer.write_nucleotides(0, sequence).unwrap();
+    ///
+    /// // Manually finish and check for errors
+    /// if let Err(e) = writer.finish() {
+    ///     eprintln!("Error flushing data: {}", e);
+    /// }
+    /// ```
     pub fn finish(&mut self) -> Result<()> {
         self.cblock.flush(&mut self.inner)?;
         self.inner.flush()?;
@@ -298,9 +807,52 @@ impl<W: Write> VBinseqWriter<W> {
         &mut self.cblock
     }
 
-    /// Ingests the internal bytes of a VBinseqWriter whose inner writer is a Vec of bytes.
+    /// Ingests data from another VBinseqWriter that uses a Vec<u8> as its inner writer
     ///
-    /// Removes the bytes from the other writer after ingestion.
+    /// This method is particularly useful for parallel processing, where multiple writers
+    /// might be writing to memory buffers and need to be combined into a single file. It
+    /// transfers all complete blocks and any partial blocks from the other writer into this one.
+    ///
+    /// The method clears the other writer's buffer after ingestion, allowing it to be reused.
+    ///
+    /// # Parameters
+    ///
+    /// * `other` - Another VBinseqWriter whose inner writer is a Vec<u8>
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If ingestion was successful
+    /// * `Err(_)` - If an error occurred during ingestion or if the headers are incompatible
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The headers of the two writers are not compatible (`WriteError::IncompatibleHeaders`)
+    /// - An I/O error occurred during data transfer
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use vbinseq::{VBinseqWriterBuilder, VBinseqHeader};
+    /// use std::fs::File;
+    ///
+    /// // Create a file writer
+    /// let file = File::create("combined.vbq").unwrap();
+    /// let mut file_writer = VBinseqWriterBuilder::default()
+    ///     .build(file)
+    ///     .unwrap();
+    ///
+    /// // Create a memory writer
+    /// let mut mem_writer = VBinseqWriterBuilder::default()
+    ///     .build(Vec::new())
+    ///     .unwrap();
+    ///
+    /// // Write some data to the memory writer
+    /// mem_writer.write_nucleotides(0, b"ACGTACGT").unwrap();
+    ///
+    /// // Ingest data from memory writer into file writer
+    /// file_writer.ingest(&mut mem_writer).unwrap();
+    /// ```
     pub fn ingest(&mut self, other: &mut VBinseqWriter<Vec<u8>>) -> Result<()> {
         if self.header != other.header {
             return Err(WriteError::IncompatibleHeaders(self.header, other.header).into());
