@@ -2,6 +2,8 @@
 name = "vbinseq"
 version = "0.1.5"
 edition = "2021"
+license = "MIT"
+authors = ["Noam Teyssier <noam.teyssier@arcinstitute.org>"]
 
 [dependencies]
 anyhow = "1.0.96"
