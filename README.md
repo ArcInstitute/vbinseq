@@ -1,5 +1,10 @@
 # VBINSEQ
 
+[![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE.md)
+![actions status](https://github.com/arcinstitute/vbinseq/workflows/CI/badge.svg)
+[![Crates.io](https://img.shields.io/crates/d/vbinseq?color=orange&label=crates.io)](https://crates.io/crates/vbinseq)
+[![docs.rs](https://img.shields.io/docsrs/vbinseq?color=green&label=docs.rs)](https://docs.rs/vbinseq/latest/vbinseq/)
+
 VBINSEQ is a high-performance binary file format for nucleotides.
 
 It is a variant of the [BINSEQ](https://github.com/arcinstitute/binseq) file format with support for _variable length records_ and _quality scores_.
