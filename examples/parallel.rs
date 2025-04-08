@@ -92,7 +92,7 @@ fn write_fastq<W: Write>(
     sequence: &[u8],
     quality: &[u8],
 ) -> Result<(), std::io::Error> {
-    write!(buffer, "@seq.{index}\n")?;
+    writeln!(buffer, "@seq.{index}")?;
     buffer.write_all(sequence)?;
     buffer.write_all(b"\n+\n")?;
     buffer.write_all(quality)?;
