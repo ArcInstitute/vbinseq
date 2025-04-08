@@ -3,7 +3,12 @@ name = "vbinseq"
 version = "0.1.5"
 edition = "2021"
 license = "MIT"
+description = "A high efficiency binary format for sequencing data with variable-length records."
 authors = ["Noam Teyssier <noam.teyssier@arcinstitute.org>"]
+repository = "https://github.com/arcinstitute/vbinseq"
+documentation = "https://docs.rs/vbinseq"
+categories = ["science::bioinformatics", "encoding", "data-structures"]
+keywords = ["bioinformatics", "nucleotide", "sequencing", "genomics", "fastq"]
 
 [dependencies]
 anyhow = "1.0.96"
@@ -23,6 +28,3 @@ num_cpus = "1.16.0"
 paraseq = "0.1.2"
 parking_lot = "0.12.3"
 rand = "0.8"
-
-[profile.release]
-debug = true
