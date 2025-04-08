@@ -2,13 +2,13 @@
 
 VBINSEQ is a high-performance binary file format for nucleotides.
 
-It is a variant of the BINSEQ file format with support for _variable length records_ and _quality scores_.
+It is a variant of the [BINSEQ](https://github.com/arcinstitute/binseq) file format with support for _variable length records_ and _quality scores_.
 
 It is a block-based file format with support for parallel compression and decompression with random-access to record blocks.
 
 ## Overview
 
-At a high-level VBINSEQ is a variant of BINSEQ with fixed-size record blocks instead of fixed-size records.
+At a high-level VBINSEQ is a variant of [BINSEQ](https://github.com/arcinstitute/binseq) with fixed-size record blocks instead of fixed-size records.
 
 Each record block is composed of repeating records which each at minimum have a single nucleotide sequence.
 Each record can optionally have an extended sequence (a paired sequence) and associated quality scores.
