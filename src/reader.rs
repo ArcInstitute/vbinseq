@@ -402,19 +402,19 @@ impl<'a> Iterator for RecordBlockIter<'a> {
 /// for record in block.iter() {
 ///     // Get record metadata
 ///     println!("Record {}, flag: {}", record.index(), record.flag());
-///     
+///
 ///     // Decode the primary sequence
 ///     record.decode_s(&mut sequence).unwrap();
 ///     println!("Sequence: {}", std::str::from_utf8(&sequence).unwrap());
 ///     sequence.clear();
-///     
+///
 ///     // If this is a paired record, decode the paired sequence
 ///     if record.is_paired() {
 ///         record.decode_x(&mut sequence).unwrap();
 ///         println!("Paired sequence: {}", std::str::from_utf8(&sequence).unwrap());
 ///         sequence.clear();
 ///     }
-///     
+///
 ///     // Access quality scores if available
 ///     if record.has_quality() {
 ///         println!("Quality scores available");
@@ -563,8 +563,7 @@ impl<'a> RefRecord<'a> {
     ///
     /// # Parameters
     ///
-    /// * `dbuf` - A mutable vector that will be cleared and then filled with the decoded
-    ///            nucleotide sequence as ASCII characters
+    /// * `dbuf` - A mutable vector that will be cleared and then filled with the decoded nucleotide sequence as ASCII characters
     ///
     /// # Returns
     ///
@@ -584,11 +583,11 @@ impl<'a> RefRecord<'a> {
     /// for record in block.iter() {
     ///     // Decode the nucleotide sequence
     ///     record.decode_s(&mut sequence).unwrap();
-    ///     
+    ///
     ///     // Convert to a string for display
     ///     let sequence_str = std::str::from_utf8(&sequence).unwrap();
     ///     println!("Sequence: {}", sequence_str);
-    ///     
+    ///
     ///     // Clear the buffer for reuse
     ///     sequence.clear();
     /// }
@@ -608,8 +607,7 @@ impl<'a> RefRecord<'a> {
     ///
     /// # Parameters
     ///
-    /// * `dbuf` - A mutable vector that will be cleared and then filled with the decoded
-    ///            nucleotide sequence as ASCII characters
+    /// * `dbuf` - A mutable vector that will be cleared and then filled with the decoded nucleotide sequence as ASCII characters
     ///
     /// # Returns
     ///
@@ -630,11 +628,11 @@ impl<'a> RefRecord<'a> {
     ///     // Only decode the paired sequence if it exists
     ///     if record.is_paired() {
     ///         record.decode_x(&mut sequence).unwrap();
-    ///         
+    ///
     ///         // Convert to a string for display
     ///         let sequence_str = std::str::from_utf8(&sequence).unwrap();
     ///         println!("Paired sequence: {}", sequence_str);
-    ///         
+    ///
     ///         // Clear the buffer for reuse
     ///         sequence.clear();
     ///     }
@@ -870,12 +868,12 @@ impl MmapReader {
     /// // Read blocks until the end of file
     /// while reader.read_block_into(&mut block).unwrap() {
     ///     println!("Read block with {} records", block.n_records());
-    ///     
+    ///
     ///     // Process each record
     ///     for record in block.iter() {
     ///         // Decode the nucleotide sequence
     ///         record.decode_s(&mut sequence_buffer).unwrap();
-    ///         
+    ///
     ///         // Do something with the sequence
     ///         println!("Record {}: length {}", record.index(), sequence_buffer.len());
     ///         sequence_buffer.clear();

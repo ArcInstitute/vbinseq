@@ -1,6 +1,6 @@
 [package]
 name = "vbinseq"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 license = "MIT"
 description = "A high efficiency binary format for sequencing data with variable-length records."
@@ -20,11 +20,7 @@ thiserror = "2.0.11"
 zstd = { version = "0.13.3", features = ["zstdmt"] }
 
 [dev-dependencies]
-anyhow = "1.0.96"
 clap = { version = "4.5.30", features = ["derive"] }
 niffler = "3.0.0"
-nucgen = "0.1.2"
-num_cpus = "1.16.0"
 paraseq = "0.1.2"
 parking_lot = "0.12.3"
-rand = "0.8"
