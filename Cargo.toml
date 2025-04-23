@@ -1,6 +1,6 @@
 [package]
 name = "vbinseq"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 license = "MIT"
 description = "A high efficiency binary format for sequencing data with variable-length records."

@@ -13,6 +13,11 @@ It is a block-based file format with support for parallel compression and decomp
 
 This is a rust library for reading and writing VBINSEQ files, for a command-line interface see [bqtools](https://github.com/arcinstitute/bqtools).
 
+# Notice
+
+This project is no longer under development in this repository. It has been pulled into the main [binseq](https://github.com/arcinstitute/binseq) repository.
+It is archived here for the time being, but will be removed in the future.
+
 ## Overview
 
 At a high-level VBINSEQ is a variant of [BINSEQ](https://github.com/arcinstitute/binseq) with fixed-size record blocks instead of fixed-size records.
